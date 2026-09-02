@@ -2064,8 +2064,13 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
       fovMode = resolveFovMode(fovPref, manifest.fullFov != null)
       const baseVol = manifest.volumes[volIdx]
       const baseUrl = fovMode === 'full' ? manifest.fullFov?.url : baseVol?.url
-      if (baseUrl) await view.setBaseVolume(baseUrl, 1)
-      syncVolumeControls() // seed the underlay rail (window/clip/zoom) from the loaded volume
+      // Honour setBaseVolume's latest-wins result here as the other two call sites do. Switching
+      // subjects while one is still loading makes this load the LOSER, and re-seeding the underlay
+      // rail from a volume that was never applied would set the window/clip for the wrong image.
+      // A subject with NO volume still syncs, because that call is also what hides the rail —
+      // skipping it would leave the previous subject's rail on screen.
+      const superseded = baseUrl ? !(await view.setBaseVolume(baseUrl, 1)) : false
+      if (!superseded) syncVolumeControls() // seed the underlay rail (window/clip/zoom), or hide it
       syncFovControls() // reflect availability + mode for this subject on the fov switch
       // Reference surface for node lookup (pial in world space; fall back to white).
       await view.setReference(manifest.surfaces.pial ?? manifest.surfaces.white)
