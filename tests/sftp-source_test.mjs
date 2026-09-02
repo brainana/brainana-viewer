@@ -1,164 +1,23 @@
 // SFTP data-source test (plan §9): stand up an in-process, fs-backed fake SFTP server and
 // round-trip through SftpDataSource. Skips (exit 0) when `ssh2` is not installed so the
 // suite stays green in environments without the optional dependency.
+//
+// The fake server now lives in fixtures/fakeSftpServer.mjs, shared with sftp-hostkey_test.mjs so
+// both exercise the same double. Since host-key verification became mandatory (audit C1), this
+// test must record the double's real host key in a known_hosts file like any other server.
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import crypto from 'node:crypto'
+import { hasSsh2, startFakeSftpServer } from './fixtures/fakeSftpServer.mjs'
 
-function skip(reason) {
-  console.log(`  skip - ${reason}`)
+if (!hasSsh2) {
+  console.log('  skip - ssh2 not installed (run `npm install`)')
   console.log('sftp-source_test: skipped')
   process.exit(0)
 }
 
-let ssh2
-try {
-  ssh2 = (await import('ssh2')).default
-} catch {
-  skip('ssh2 not installed (run `npm install`)')
-}
-
-const { Server } = ssh2
-const { OPEN_MODE, STATUS_CODE } = ssh2.utils.sftp
-
-// ---------------------------------------------------------------------------
-// Minimal fs-backed SFTP server (test double). Maps SFTP ops onto a temp dir.
-// ---------------------------------------------------------------------------
-function startFakeSftpServer(rootDir) {
-  const { privateKey } = crypto.generateKeyPairSync('rsa', {
-    modulusLength: 2048,
-    privateKeyEncoding: { type: 'pkcs1', format: 'pem' },
-    publicKeyEncoding: { type: 'pkcs1', format: 'pem' },
-  })
-
-  // Our client always sends absolute remote paths (remoteRoot is absolute), so serve the
-  // real fs directly; relative paths (if any) resolve under rootDir. Test double only.
-  const toLocal = (p) => (path.isAbsolute(p) ? p : path.join(rootDir, p))
-
-  const clients = []
-  const server = new Server({ hostKeys: [privateKey] }, (client) => {
-    clients.push(client)
-    client.on('authentication', (ctx) => ctx.accept())
-    client.on('ready', () => {
-      client.on('session', (acceptSession) => {
-        const session = acceptSession()
-        session.on('sftp', (acceptSftp) => {
-          const sftp = acceptSftp()
-          const handles = new Map()
-          let counter = 0
-          const newHandle = (obj) => {
-            const id = counter++
-            handles.set(id, obj)
-            const buf = Buffer.alloc(4)
-            buf.writeUInt32BE(id, 0)
-            return buf
-          }
-          const attrsFor = (st) => ({ mode: st.mode, size: st.size, uid: st.uid, gid: st.gid, atime: Math.floor(st.atimeMs / 1000), mtime: Math.floor(st.mtimeMs / 1000) })
-
-          sftp.on('REALPATH', (reqid, p) => {
-            const abs = path.posix.normalize(p.startsWith('/') ? p : `/${p}`)
-            sftp.name(reqid, [{ filename: abs, longname: abs, attrs: {} }])
-          })
-          sftp.on('STAT', statHandler)
-          sftp.on('LSTAT', statHandler)
-          function statHandler(reqid, p) {
-            try {
-              sftp.attrs(reqid, attrsFor(fs.statSync(toLocal(p))))
-            } catch {
-              sftp.status(reqid, STATUS_CODE.NO_SUCH_FILE)
-            }
-          }
-          sftp.on('OPENDIR', (reqid, p) => {
-            try {
-              const names = fs.readdirSync(toLocal(p))
-              sftp.handle(reqid, newHandle({ type: 'dir', dir: p, names, read: false }))
-            } catch {
-              sftp.status(reqid, STATUS_CODE.NO_SUCH_FILE)
-            }
-          })
-          sftp.on('READDIR', (reqid, handle) => {
-            const h = handles.get(handle.readUInt32BE(0))
-            if (!h || h.type !== 'dir') return sftp.status(reqid, STATUS_CODE.FAILURE)
-            if (h.read) return sftp.status(reqid, STATUS_CODE.EOF)
-            h.read = true
-            const list = h.names.map((name) => {
-              const st = fs.statSync(path.join(toLocal(h.dir), name))
-              return { filename: name, longname: name, attrs: attrsFor(st) }
-            })
-            sftp.name(reqid, list)
-          })
-          sftp.on('OPEN', (reqid, filename, flags, _attrs) => {
-            let mode = 'r'
-            if (flags & OPEN_MODE.WRITE) mode = flags & OPEN_MODE.APPEND ? 'a' : 'w'
-            try {
-              const fd = fs.openSync(toLocal(filename), mode)
-              sftp.handle(reqid, newHandle({ type: 'file', fd }))
-            } catch {
-              sftp.status(reqid, STATUS_CODE.NO_SUCH_FILE)
-            }
-          })
-          sftp.on('READ', (reqid, handle, offset, length) => {
-            const h = handles.get(handle.readUInt32BE(0))
-            if (!h || h.type !== 'file') return sftp.status(reqid, STATUS_CODE.FAILURE)
-            const buf = Buffer.alloc(length)
-            const bytes = fs.readSync(h.fd, buf, 0, length, offset)
-            if (bytes <= 0) return sftp.status(reqid, STATUS_CODE.EOF)
-            sftp.data(reqid, buf.subarray(0, bytes))
-          })
-          sftp.on('WRITE', (reqid, handle, offset, data) => {
-            const h = handles.get(handle.readUInt32BE(0))
-            if (!h || h.type !== 'file') return sftp.status(reqid, STATUS_CODE.FAILURE)
-            fs.writeSync(h.fd, data, 0, data.length, offset)
-            sftp.status(reqid, STATUS_CODE.OK)
-          })
-          sftp.on('MKDIR', (reqid, p) => {
-            try {
-              fs.mkdirSync(toLocal(p), { recursive: true })
-              sftp.status(reqid, STATUS_CODE.OK)
-            } catch {
-              sftp.status(reqid, STATUS_CODE.FAILURE)
-            }
-          })
-          sftp.on('RENAME', (reqid, from, to) => {
-            try {
-              fs.renameSync(toLocal(from), toLocal(to))
-              sftp.status(reqid, STATUS_CODE.OK)
-            } catch {
-              sftp.status(reqid, STATUS_CODE.FAILURE)
-            }
-          })
-          sftp.on('REMOVE', (reqid, p) => {
-            try {
-              fs.rmSync(toLocal(p), { force: true })
-              sftp.status(reqid, STATUS_CODE.OK)
-            } catch {
-              sftp.status(reqid, STATUS_CODE.FAILURE)
-            }
-          })
-          sftp.on('FSTAT', (reqid, handle) => {
-            const h = handles.get(handle.readUInt32BE(0))
-            if (!h || h.type !== 'file') return sftp.status(reqid, STATUS_CODE.FAILURE)
-            sftp.attrs(reqid, attrsFor(fs.fstatSync(h.fd)))
-          })
-          sftp.on('CLOSE', (reqid, handle) => {
-            const id = handle.readUInt32BE(0)
-            const h = handles.get(id)
-            if (h?.type === 'file') fs.closeSync(h.fd)
-            handles.delete(id)
-            sftp.status(reqid, STATUS_CODE.OK)
-          })
-        })
-      })
-    })
-  })
-
-  return new Promise((resolve) => {
-    server.listen(0, '127.0.0.1', () => resolve({ server, port: server.address().port, clients }))
-  })
-}
 
 // Windows can't delete a directory that still holds an open file handle (EBUSY/EPERM), and
 // the SFTP server/cache may not have released every fd the instant close() returns. Retry a
@@ -191,11 +50,17 @@ async function main() {
   await fsp.mkdir(path.join(remoteRoot, 'sub-r1', 'anat'), { recursive: true })
   await fsp.writeFile(path.join(remoteRoot, 'sub-r1', 'anat', 'sub-r1_space-T1w_desc-preproc_T1w.nii.gz'), Buffer.from('REMOTE-VOLUME-BYTES-9876543210'))
 
-  const { server, port, clients } = await startFakeSftpServer(remoteRoot)
+  const { server, port, clients, hostKey } = await startFakeSftpServer(remoteRoot)
+
+  // Trust this server's key, exactly as a user would after their first `ssh` to it. Written to a
+  // temp file rather than the real ~/.ssh/known_hosts so the suite never touches the developer's.
+  const knownHostsDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'brainana-knownhosts-'))
+  const knownHostsPath = path.join(knownHostsDir, 'known_hosts')
+  await fsp.writeFile(knownHostsPath, `[127.0.0.1]:${port} ${hostKey.type} ${hostKey.base64}\n`)
 
   const source = new SftpDataSource({
     id: 'remote-aaaaaaaaaaaa',
-    connection: { host: '127.0.0.1', port, username: 'test', password: 'test' },
+    connection: { host: '127.0.0.1', port, username: 'test', password: 'test', knownHostsPath },
     remoteRoot,
     cacheRoot,
     manifest: viewerManifestProvider,
@@ -239,6 +104,7 @@ async function main() {
     await new Promise((resolve) => server.close(resolve))
     await rmWithRetry(remoteRoot)
     await rmWithRetry(cacheRoot)
+    await rmWithRetry(knownHostsDir)
   }
 
   console.log(`sftp-source_test: ${passed} checks passed`)

@@ -64,6 +64,11 @@ When you open the app it starts on a welcome screen — no data is loaded yet. A
 1. **Add a dataset.** Click **dataset** (top-left) and point the Viewer at a **brainana output
    directory** — a folder containing `sub-*` subjects. This can be a **local** folder or a
    **remote** workstation over **SSH/SFTP**. Add more than one if you like.
+
+   > **Remote hosts must be in your `known_hosts`.** Like `ssh` itself, the Viewer refuses to
+   > connect to a server whose host key it cannot verify, so a machine-in-the-middle cannot
+   > collect your password. If you get *"Unrecognised SSH host key"*, `ssh` to that host once
+   > from a terminal (or run `ssh-keyscan`) to record its key, then retry.
 2. **Choose a monkey.** Pick a subject from the **monkey** dropdown; the default anatomy + surface view loads.
 3. **Explore.** Use the toolbar and side panel to switch the base volume and surface, add an
    **atlas**, apply **morphology** shading or a **func map**, and tune colormaps. Click anywhere
