@@ -11,6 +11,7 @@ import { MultiView, MORPH_DEFAULT_COLORMAP, type SurfaceNode, type SurfacePairUr
 import { Marker } from '@brainana/niivue-kit/marker.ts'
 import { OrientationGizmo } from '@brainana/niivue-kit/orientation.ts'
 import { createViewerStore, type Layout } from '../state/store.ts'
+import { FOV_MODES, resolveFovMode, fovTooltip, loadFovPreference, saveFovPreference, type FovMode } from '../state/fovMode.ts'
 import { parseAtlasTsv, buildLabelColortable, type AtlasLabel } from '../data/atlas.ts'
 import { ARM_SEED } from '../data/colors.ts'
 import { finiteExtrema, createFunctionalSurfaceLut, quantizeFunctionalSurfaceValues, maskSurfaceBinsByF, maskSurfaceBinsByValue, type SurfaceFunctionMode } from '../data/functional.ts'
@@ -186,6 +187,14 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
   const volCheck = h('input', { type: 'checkbox' }) as HTMLInputElement
   volCheck.checked = true
   const volSelect = h('select', { title: 'Base volume (FreeSurfer mri/)', class: 'narrow' })
+  // Field-of-view switch: 'full' swaps the underlay to the uncropped conform so a chamber or
+  // head-post outside the processing box becomes visible. Same segmented idiom as the view presets.
+  const fovBtns = FOV_MODES.map((m) => {
+    const b = h('button', { type: 'button', class: 'view-btn', title: m.title }, [m.label]) as HTMLButtonElement
+    b.dataset.fov = m.mode
+    return b
+  })
+  const fovGroup = h('div', { class: 'views fov-modes' }, fovBtns)
   const surfCheck = h('input', { type: 'checkbox' }) as HTMLInputElement
   surfCheck.checked = true
   const surfSelect = h('select', { title: 'Cortical surface' })
@@ -281,7 +290,10 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
     h('div', { class: 'tb-cell' }, [monkeySelect]),
     tbDivide(),
     // col 3: vol (row 1) · surf (row 2). LH/RH moved to col 4 row 1 (freed by the underlay rail).
-    h('div', { class: 'tb-cell' }, [h('label', { class: 'tb-field inline' }, [volCheck, h('span', {}, ['vol']), volSelect])]),
+    h('div', { class: 'tb-cell' }, [
+      h('label', { class: 'tb-field inline' }, [volCheck, h('span', {}, ['vol']), volSelect]),
+      h('label', { class: 'tb-field inline' }, [h('span', {}, ['FOV']), fovGroup]),
+    ]),
     h('div', { class: 'tb-cell' }, [
       h('label', { class: 'tb-field inline' }, [surfCheck, h('span', {}, ['surf']), surfSelect]),
     ]),
@@ -951,13 +963,81 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
     view?.setVolumeOpacity(paneState().vol ? 1 : 0)
     applyPaneVisibility()
   })
+  // --- field of view -----------------------------------------------------------------------
+  // fovPref is what the user chose (sticky, app-wide); fovMode is what is actually on screen. They
+  // diverge on a subject with no full-FOV volume: the display degrades to 'best' while the
+  // preference survives, so the next subject that has one comes up in full FOV again.
+  let fovPref: FovMode = loadFovPreference()
+  let fovMode: FovMode = 'best'
+
+  const hasFullFov = (): boolean => manifest?.fullFov != null
+
+  // Reflect mode + availability on the buttons. In 'full' the volume dropdown is disabled rather
+  // than rewritten: the full-FOV conform is the only volume that exists at that extent, and leaving
+  // volSelect's value intact is what lets 'best' restore the previous choice with no saved index.
+  const syncFovControls = (): void => {
+    const available = hasFullFov()
+    const tip = fovTooltip(manifest?.fullFov ?? null)
+    for (const b of fovBtns) {
+      const mode = b.dataset.fov as FovMode
+      b.classList.toggle('active', mode === fovMode)
+      b.disabled = mode === 'full' && !available
+      b.title = mode === 'full' ? tip : (FOV_MODES.find((m) => m.mode === mode)?.title ?? '')
+    }
+    volSelect.disabled = fovMode === 'full'
+    volSelect.title =
+      fovMode === 'full'
+        ? 'Switch FOV back to best to choose a base volume — full FOV has only the uncropped conform.'
+        : 'Base volume (FreeSurfer mri/)'
+  }
+
+  // The underlay url for a mode: the full-FOV conform, or whatever the dropdown currently names.
+  const baseUrlFor = (mode: FovMode): string | null => {
+    if (!manifest) return null
+    if (mode === 'full') return manifest.fullFov?.url ?? null
+    return manifest.volumes[Number(volSelect.value)]?.url ?? null
+  }
+
+  // Load the underlay for `mode`. Only the user's own click reaches this — a subject load applies the
+  // preference inline instead — so the choice is always recorded. A failed load leaves the previous
+  // underlay and displayed mode untouched; the recorded preference still reflects what was asked for.
+  const applyFovMode = async (mode: FovMode): Promise<void> => {
+    if (!view || !manifest) return
+    fovPref = mode
+    saveFovPreference(mode)
+    const effective = resolveFovMode(mode, hasFullFov())
+    const url = baseUrlFor(effective)
+    if (!url) return
+    try {
+      // The full-FOV image is the conform stage, not the preproc one, so its intensity range differs;
+      // syncVolumeControls() re-seeds the display window from the new volume rather than carrying the
+      // old one over. Skipped when a newer load superseded this one.
+      if (await view.setBaseVolume(url, paneState().vol ? 1 : 0)) syncVolumeControls()
+      fovMode = effective
+      syncFovControls()
+    } catch {
+      // fov switch failure is non-fatal — the previous base volume and mode stay in place
+    }
+  }
+
+  for (const b of fovBtns) {
+    b.addEventListener('click', () => {
+      const mode = b.dataset.fov as FovMode
+      if (mode === fovMode) return
+      void applyFovMode(mode)
+    })
+  }
+  syncFovControls() // welcome screen: 'best' reads as active and 'full' as unavailable until a subject loads
+
   volSelect.addEventListener('change', async () => {
     if (!view || !manifest) return
     const vol = manifest.volumes[Number(volSelect.value)]
     if (!vol) return
     try {
-      await view.setBaseVolume(vol.url, paneState().vol ? 1 : 0)
-      syncVolumeControls() // re-seed the underlay rail for the switched volume's intensity range
+      // Only reachable in 'best' — the dropdown is disabled in 'full'.
+      if (await view.setBaseVolume(vol.url, paneState().vol ? 1 : 0)) {
+        syncVolumeControls() // re-seed the underlay rail for the switched volume's intensity range
+      }
       store.set('volumeKey', vol.key)
     } catch {
       // volume switch failure is non-fatal — the previous base volume stays loaded
@@ -1967,7 +2047,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
           }
           const ijk = view!.baseVox(info.mm)
           const hemiNode = node ?? currentNode
-          coordEditor.update(info.mm, ijk, hemiNode ? (hemiNode.hemi === 0 ? 'left' : 'right') : '—')
+          coordEditor.update(info.mm, ijk, hemiNode ? (hemiNode.hemi === 0 ? 'L' : 'R') : '—')
           updateAnatomyReport()
           updateFunctionReport()
           updateVisualField()
@@ -1978,9 +2058,15 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
         })
       }
 
+      // Apply the sticky fov preference to the incoming subject. It degrades to 'best' when this
+      // dataset has no full-FOV volume, without clearing the preference, so a later subject that
+      // does have one comes up in full FOV again.
+      fovMode = resolveFovMode(fovPref, manifest.fullFov != null)
       const baseVol = manifest.volumes[volIdx]
-      if (baseVol) await view.setBaseVolume(baseVol.url, 1)
+      const baseUrl = fovMode === 'full' ? manifest.fullFov?.url : baseVol?.url
+      if (baseUrl) await view.setBaseVolume(baseUrl, 1)
       syncVolumeControls() // seed the underlay rail (window/clip/zoom) from the loaded volume
+      syncFovControls() // reflect availability + mode for this subject on the fov switch
       // Reference surface for node lookup (pial in world space; fall back to white).
       await view.setReference(manifest.surfaces.pial ?? manifest.surfaces.white)
       if (surfDefault) await applySurface(surfDefault)

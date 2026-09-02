@@ -53,10 +53,13 @@ body {
 .view-btn { position: relative; background: var(--panel-2); border: 1px solid var(--border); color: var(--text); padding: var(--sp-1) 6px; border-radius: 0; margin-left: -1px; cursor: pointer; font-size: var(--fs-1); transition: border-color var(--dur) var(--ease), color var(--dur) var(--ease), background var(--dur) var(--ease); }
 .views .view-btn:first-child { border-radius: var(--r-sm) 0 0 var(--r-sm); margin-left: 0; }
 .views .view-btn:last-child { border-radius: 0 var(--r-sm) var(--r-sm) 0; }
-.view-btn:hover, .view-btn.active { z-index: 1; }
-.view-btn:hover { border-color: var(--accent); color: var(--accent-2); }
+.view-btn:hover:not(:disabled), .view-btn.active { z-index: 1; }
+.view-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent-2); }
 .view-btn.active { border-color: var(--accent); color: var(--accent-2); background: var(--accent-tint); }
+/* Matches .panel-btn:disabled — the fov switch greys out for datasets with no full-FOV volume. */
+.view-btn:disabled { opacity: 0.4; cursor: default; }
 select.narrow { width: 96px; }
+select:disabled { opacity: 0.45; cursor: default; }
 .brand { font-weight: 700; letter-spacing: -0.01em; display: flex; align-items: center; gap: var(--sp-3); }.badge { font-size: var(--fs-xs); padding: 1px var(--sp-2); border: 1px solid var(--border-2); border-radius: var(--r-pill); color: var(--muted); }
 .tb-field { display: flex; align-items: center; gap: var(--sp-2); color: var(--muted); }
 .tb-field.inline > span { color: var(--muted); }

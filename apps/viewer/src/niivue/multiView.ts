@@ -225,8 +225,16 @@ export class MultiView {
 
   // Load (or switch) the base volume. The volume lives ONLY in the slices instance — the
   // surface pane shows the cortical surface + marker, never 3D volume slices.
-  async setBaseVolume(url: string, opacity = 1): Promise<void> {
+  //
+  // Two controls drive this (the volume dropdown and the fov switch), so overlapping loads are
+  // reachable: without a token, a slow loser's removeVolume() would delete the winner's volume and
+  // leave #urls.base describing the wrong file. Latest wins; a superseded load is discarded.
+  // Returns whether this load was actually applied, so callers can skip re-seeding the underlay rail.
+  #baseToken = 0
+  async setBaseVolume(url: string, opacity = 1): Promise<boolean> {
+    const token = ++this.#baseToken
     const img = await NVImage.loadFromUrl({ url: this.#client.dataUrl(url), colormap: 'gray', opacity })
+    if (token !== this.#baseToken) return false // a newer switch already landed
     if (this.#baseVol) this.slices.removeVolume(this.#baseVol)
     this.slices.addVolume(img)
     this.slices.setVolume(img, 0)
@@ -234,6 +242,7 @@ export class MultiView {
     this.#urls.base = url
     this.#baseOrig = null // drop the previous volume's clip cache; re-captured on first clip
     this.#baseClip = undefined // no mask applied to the freshly loaded voxels
+    return true
   }
 
   setVolumeOpacity(opacity: number): void {
