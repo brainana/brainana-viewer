@@ -62,6 +62,24 @@ export function parseRange(rangeHeader, totalSize) {
 export const SOURCE_ID_PATTERN = '[^/]+-[0-9a-f]{12}'
 
 // In-process registry of live data sources.
+// THE source summary shape sent to clients. Every route that returns a source must go through
+// this: the shape was previously hand-built in three places (registry.list, POST /api/sources,
+// PATCH /api/sources/:id), and a field added to one of them silently reached only some callers —
+// which is exactly how `root` went missing from a freshly-added source.
+//
+// `root` is the absolute path the data actually lives at: on this machine for a local source, on
+// the remote host for an SFTP one. It grants no reach the "add local dataset" form did not already
+// have (that form accepts any absolute path), and it lets a client show a real path — the report does.
+export function summarizeSource(source) {
+  return {
+    id: source.id,
+    type: source.type,
+    label: source.label,
+    customLabel: source.customLabel ?? null,
+    root: source.root ?? source.remoteRoot ?? null,
+  }
+}
+
 export class SourceRegistry {
   #sources = new Map()
 
@@ -82,7 +100,7 @@ export class SourceRegistry {
   }
 
   list() {
-    return [...this.#sources.values()].map((s) => ({ id: s.id, type: s.type, label: s.label, customLabel: s.customLabel ?? null }))
+    return [...this.#sources.values()].map(summarizeSource)
   }
 
   async remove(id) {

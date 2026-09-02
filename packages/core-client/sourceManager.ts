@@ -9,6 +9,9 @@ export interface SourceSummary {
   label: string
   /** User-editable display name overriding `label` in pickers; null when unset. RAM-only server-side. */
   customLabel: string | null
+  /** Absolute path the data lives at — on this machine for a local source, on the remote host for
+   *  a remote one. Null when the server does not report one. */
+  root: string | null
 }
 
 export interface LocalSourceSpec {

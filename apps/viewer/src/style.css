@@ -670,3 +670,35 @@ input.slider-num { flex: 0 0 auto; width: var(--num-w); padding: 0 var(--sp-1); 
 .colorbar-clip[hidden] { display: none; }
 .colorbar-ticks { display: flex; justify-content: space-between; font-size: var(--fs-xs); color: var(--muted); }
 .colorbar-tick:nth-child(2) { color: var(--text); }
+
+/* ---------- report controls (toolbar) + report dialog ---------- */
+.report-controls { display: flex; align-items: center; gap: var(--sp-2); }
+.point-count { min-width: 2ch; text-align: center; font-variant-numeric: tabular-nums; }
+
+.report-dialog { width: min(620px, 92vw); }
+.report-dialog h3 { font-size: var(--fs-1); text-transform: uppercase; letter-spacing: .06em;
+  color: var(--muted); margin: var(--sp-5) 0 var(--sp-3); }
+/* The point list can grow long; it scrolls inside the dialog rather than pushing the footer away.
+   The LIST owns the columns, not each row: when every row was its own flex container the name input
+   absorbed whatever the coordinates left over, so a row reading "-19.3, -17.0, 17.4" sized its input
+   differently from one reading "-19.9, 0.0, 32.1" and the coordinate column and remove buttons came
+   out ragged. `display: contents` on the row dissolves its box so index / name / coords / remove
+   become items of this grid and share one track each. */
+.report-points { display: grid; grid-template-columns: max-content 1fr max-content max-content;
+  align-items: center; row-gap: var(--sp-2); column-gap: var(--sp-3);
+  max-height: 32vh; overflow: auto; }
+.report-point-row { display: contents; }
+/* The empty-state sentence is a child of the list too; without spanning it would be squeezed into
+   the first (max-content) column and size that column to the whole sentence. */
+.report-points > p { grid-column: 1 / -1; margin: 0; }
+.report-point-n { min-width: 2ch; color: var(--muted); font-variant-numeric: tabular-nums; }
+.report-point-mm { color: var(--muted); font-family: var(--mono); font-size: var(--fs-1);
+  white-space: nowrap; font-variant-numeric: tabular-nums; text-align: right; }
+/* Folder picker row, revealed only when "save into the dataset" is selected; indented to read as
+   detail belonging to that radio. */
+.report-dest-detail { margin: var(--sp-3) 0 0 var(--sp-6); }
+.report-dest-detail[hidden] { display: none; }
+/* The file name applies to either destination, so it sits at the destination block's own level. */
+.report-filename { margin: var(--sp-3) 0 0; }
+.report-folder { color: var(--muted); font-family: var(--mono); font-size: var(--fs-1);
+  overflow-wrap: anywhere; }

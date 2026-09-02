@@ -8,12 +8,12 @@ Brainana Viewer against real data without preprocessing your own.
 **1. Download this folder.** From the repo root — needs git ≥ 2.25:
 
 ```sh
-git clone --depth 1 --filter=blob:none --sparse https://github.com/arcaro-lab/brainana_tools.git
-cd brainana_tools
+git clone --depth 1 --filter=blob:none --sparse https://github.com/brainana/brainana-viewer.git
+cd brainana-viewer
 git sparse-checkout set datasets/demo_viewer
 ```
 
-On older git, clone the whole repo instead: `git clone https://github.com/arcaro-lab/brainana_tools.git`.
+On older git, clone the whole repo instead: `git clone https://github.com/brainana/brainana-viewer.git`.
 
 **2. Add it as a local dataset.** In the Viewer, open the **dataset** panel. Under **local
 dataset**, browse to (or paste the path of) the `demo_viewer` folder and click **add**:

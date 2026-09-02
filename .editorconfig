@@ -1,5 +1,5 @@
 # EditorConfig — https://editorconfig.org
-# Canonical formatting for the brainana_tools monorepo. Matches the existing
+# Canonical formatting for the brainana-viewer monorepo. Matches the existing
 # 2-space ESM/TS source and LF line endings; no linter/formatter is configured,
 # so this file is the single source of editor defaults.
 root = true

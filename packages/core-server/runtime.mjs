@@ -13,7 +13,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import crypto from 'node:crypto'
-import { SourceRegistry, SOURCE_ID_PATTERN } from './dataSource.mjs'
+import { SourceRegistry, SOURCE_ID_PATTERN, summarizeSource } from './dataSource.mjs'
 import { LocalDataSource } from './localSource.mjs'
 import { SftpDataSource } from './sftpSource.mjs'
 import { SftpClient } from './sftpClient.mjs'
@@ -404,7 +404,7 @@ export function createServer({ token = null, distRoot = null, initialSources = [
             )
           }
           registry.add(source, { type: source.type })
-          return sendJson(res, 200, { id: source.id, type: source.type, label: source.label, customLabel: source.customLabel ?? null })
+          return sendJson(res, 200, summarizeSource(source))
         } catch (error) {
           return sendJson(res, error?.statusCode || 400, { error: error instanceof Error ? error.message : String(error) })
         }
@@ -419,7 +419,7 @@ export function createServer({ token = null, distRoot = null, initialSources = [
           const body = await jsonBody(req)
           const trimmed = typeof body.customLabel === 'string' ? body.customLabel.trim() : ''
           source.customLabel = trimmed || null
-          return sendJson(res, 200, { id: source.id, type: source.type, label: source.label, customLabel: source.customLabel })
+          return sendJson(res, 200, summarizeSource(source))
         } catch (error) {
           return sendJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
         }

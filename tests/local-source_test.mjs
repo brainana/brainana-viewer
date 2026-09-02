@@ -85,6 +85,38 @@ async function main() {
     assert.match(source.id, /^local-[0-9a-f]{12}$/, 'source id is scoped local-<hex>')
     ok('POST /api/sources opens a local source')
 
+    // --- every route that returns a source must return the SAME summary ---
+    // The shape used to be hand-built per route, so a field added to one reached only some callers:
+    // `root` was present on GET but missing from POST, and since SourceManager caches the POST
+    // response rather than re-listing, a dataset added mid-session had no root for the rest of it.
+    const listed = await (await fetch(`${base}/api/sources`, { headers: auth })).json()
+    const fromList = listed.find((entry) => entry.id === source.id)
+    assert.deepEqual(Object.keys(source).sort(), Object.keys(fromList).sort(), 'POST and GET agree on the summary shape')
+    assert.deepEqual(source, fromList, 'and on its values')
+
+    const patched = await (
+      await fetch(`${base}/api/sources/${source.id}`, {
+        method: 'PATCH',
+        headers: { ...auth, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ customLabel: 'renamed' }),
+      })
+    ).json()
+    assert.deepEqual(Object.keys(patched).sort(), Object.keys(source).sort(), 'PATCH agrees on the summary shape too')
+    assert.equal(patched.customLabel, 'renamed')
+    ok('POST, GET and PATCH return the same source summary shape')
+
+    // The summary carries the absolute root, so a client can show a real path (the report does).
+    assert.equal(source.root, fixtureRoot, 'POST reports the absolute source root')
+    assert.equal(fromList.root, fixtureRoot, 'GET reports it')
+    assert.equal(patched.root, fixtureRoot, 'PATCH reports it')
+    // Restore the original label so later assertions see the source as they expect.
+    await fetch(`${base}/api/sources/${source.id}`, {
+      method: 'PATCH',
+      headers: { ...auth, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ customLabel: '' }),
+    })
+    ok('the source summary carries the absolute root on every route')
+
     // --- list monkeys (both flat + session subjects) ---
     const monkeys = await (await fetch(`${base}/api/sources/${source.id}/monkeys`, { headers: auth })).json()
     const ids = monkeys.map((m) => m.id).sort()

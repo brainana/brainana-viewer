@@ -14,7 +14,7 @@ For installers see [desktop-app.md](desktop-app.md).
 1. **Terminal 1 — start the API/data server**
 
    ```sh
-   cd brainana_tools
+   cd brainana-viewer
    npm run server -- --port 5174 \
      --output-dir datasets/demo_viewer      # or your own /path/to/preprocessed/dataset
    ```
@@ -28,7 +28,7 @@ For installers see [desktop-app.md](desktop-app.md).
 2. **Terminal 2 — start the Vite dev server**
 
    ```sh
-   cd brainana_tools
+   cd brainana-viewer
    npm run dev:web
    ```
 
@@ -65,7 +65,7 @@ Both should return `{ "ok": true, ... }`.
 1. **Build and launch**
 
    ```sh
-   cd brainana_tools
+   cd brainana-viewer
    npm run dev:desktop
    ```
 
@@ -85,7 +85,7 @@ Dev commands (`dev:desktop`) launch Electron against your working tree — they 
 produce something you can hand to a user. To get a **standalone app file per OS**, run:
 
 ```sh
-cd brainana_tools
+cd brainana-viewer
 npm run dist:desktop     # build the SPA, then electron-builder → apps/viewer/release/
 ```
 
@@ -149,8 +149,8 @@ handles `src/**` on its own; just hard-reload with Ctrl/Cmd-Shift-R).
 List only *your* Vite + API dev processes, with PIDs:
 
 ```sh
-# Your brainana_tools dev processes only (scoped to your user)
-pgrep -u "$USER" -af 'brainana_tools/node_modules/.bin/vite|npm run server|npm run dev:web'
+# Your brainana-viewer dev processes only (scoped to your user)
+pgrep -u "$USER" -af 'brainana-viewer/node_modules/.bin/vite|npm run server|npm run dev:web'
 ```
 
 Or find what *you* have listening on the dev ports:

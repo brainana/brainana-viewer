@@ -25,6 +25,8 @@ Built on [NiiVue](https://github.com/niivue/niivue) + WebGL2, it runs on **macOS
 - **Functional maps** — retinotopy and somatotopy on both volume and surface.
 - **Local or remote data** — dataset on your computer or a lab workstation.
 - **Compare monkeys** — easily switch subjects to compare across monkeys.
+- **HTML reports** — bookmark locations and export a self-contained report with file provenance,
+  region and measurement readouts, and screenshots.
 
 ## Download & install
 
@@ -75,8 +77,8 @@ this repo. Grab just the `demo_viewer` folder and add it as a local dataset to t
 needs git ≥ 2.25:
 
 ```sh
-git clone --depth 1 --filter=blob:none --sparse https://github.com/arcaro-lab/brainana_tools.git
-cd brainana_tools
+git clone --depth 1 --filter=blob:none --sparse https://github.com/brainana/brainana-viewer.git
+cd brainana-viewer
 git sparse-checkout set datasets/demo_viewer     # a real brainana output dir
 ```
 
@@ -84,7 +86,7 @@ Then, in the app, open the **dataset** panel and, under **local dataset**, add t
 folder:
 
 ```
-brainana_tools/
+brainana-viewer/
 └─ datasets/
    └─ demo_viewer/   ← add THIS folder
       ├─ sub-example/
@@ -95,7 +97,40 @@ brainana_tools/
 > Add the **`demo_viewer` folder itself** — the level that *contains* `sub-example/`, not one of
 > the subject folders inside it.
 
-On older git, clone the whole repo instead: `git clone https://github.com/arcaro-lab/brainana_tools.git`.
+On older git, clone the whole repo instead: `git clone https://github.com/brainana/brainana-viewer.git`.
+
+---
+
+## Generate a report
+
+The **report** controls sit at the top right of the toolbar, under the category tabs.
+
+1. **Bookmark the locations you care about.** Move the crosshair to a spot and click **+ point**.
+   The readouts are captured at that moment — every atlas's region, the morphometry at the nearest
+   vertex, and the retinotopy or somatotopy values — so a point keeps what was on screen even after
+   you switch overlays. The counter beside the button shows how many points you have.
+2. **Click report.** The dialog lists your points (rename or remove them there), lets you include or
+   skip screenshots, and asks where to put the file.
+3. **Choose a destination.** **Download** is the default and behaves the same in the browser and the
+   desktop app. Or pick **save into the dataset** to write the report next to your data — this works
+   for remote datasets too, since the save happens server-side.
+
+The result is a single self-contained `.html` file: it embeds its own styling and images, loads
+nothing over the network, and contains no scripts, so it opens years later on any machine and prints
+cleanly. It documents
+
+- **where the data came from** — the path of every loaded file, its key NIfTI header fields (n_dim,
+  dimensions, resolution, datatype, intent, scaling, and the voxel→world affine), and the version of
+  the **brainana** pipeline that produced it, read from each file's JSON sidecar;
+- **how it was displayed** — layout, overlays, colormaps, display ranges, clips, thresholds, camera;
+- **what you selected** — the current crosshair and every bookmarked point, in full;
+- **what it looked like** — the slice montage and 3D surface, plus a pair of images per point.
+
+Bookmarked points are coordinates in one subject's space, so switching monkeys clears them.
+
+> [!TIP]
+> The report also embeds its own data as JSON (in a `<script type="application/json">` block at the
+> end of the file), so a report can be parsed back into a table by a script.
 
 ---
 
