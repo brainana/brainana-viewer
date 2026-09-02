@@ -67,6 +67,38 @@ export function createTokenGuard(token) {
 }
 
 // ---------------------------------------------------------------------------
+// Host containment
+// ---------------------------------------------------------------------------
+
+// True when a request's `Host` header names this machine's loopback interface.
+//
+// The server binds 127.0.0.1, but a bind does not decide what name the CLIENT used to get here.
+// In a DNS-rebinding attack a page on evil.com re-resolves that name to 127.0.0.1, reaches this
+// socket, and — because the browser considers it same-origin with evil.com — can read the response
+// body, including the session token templated into index.html. Comparing Host against loopback is
+// what makes the bind mean what it appears to mean. A missing/blank header is refused: every
+// HTTP/1.1 client sends one, so its absence is not a case worth being lenient about.
+export function isLoopbackHost(hostHeader) {
+  if (typeof hostHeader !== 'string' || hostHeader === '') return false
+  // Split off the port. IPv6 literals are bracketed in a Host header ("[::1]:5173"), so they must
+  // be unwrapped before the naive first-colon split that handles "127.0.0.1:5173".
+  let host
+  if (hostHeader.startsWith('[')) {
+    const close = hostHeader.indexOf(']')
+    if (close < 0) return false
+    host = hostHeader.slice(1, close)
+  } else {
+    const colon = hostHeader.indexOf(':')
+    host = colon < 0 ? hostHeader : hostHeader.slice(0, colon)
+  }
+  const lower = host.toLowerCase()
+  if (lower === 'localhost' || lower === '::1') return true
+  // The whole 127.0.0.0/8 block is loopback, not just 127.0.0.1. Anchored so a suffix that merely
+  // starts with a loopback address ("127.0.0.1.evil.com") is not mistaken for one.
+  return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(lower)
+}
+
+// ---------------------------------------------------------------------------
 // Path containment (ported from server.mjs isWithin / cleanRelative)
 // ---------------------------------------------------------------------------
 

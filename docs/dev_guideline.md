@@ -15,7 +15,7 @@ For installers see [desktop-app.md](desktop-app.md).
 
    ```sh
    cd brainana-viewer
-   npm run server -- --port 5174 \
+   npm run dev:server -- \
      --output-dir datasets/demo_viewer      # or your own /path/to/preprocessed/dataset
    ```
 
@@ -41,7 +41,7 @@ For installers see [desktop-app.md](desktop-app.md).
 | Service | Default | Notes |
 |---|---|---|
 | Vite (client) | 5173 | `npm run dev:web -- --port 5175 --strictPort` if taken |
-| Node API | 5173 | **Always pass `--port 5174`** so it doesn't collide with Vite |
+| Node API | 5173 | **Always pass `--port 5174`** so it doesn't collide with Vite (`dev:server` already does) |
 
 If the API runs on a non-default port: `BRAINANA_DEV_PORT=<port> npm run dev:web`.
 
@@ -124,7 +124,8 @@ notarization, native-module handling, and the full rationale, see
 | Command | Purpose |
 |---|---|
 | `npm run dev:web` | Vite + HMR (pair with `npm run server`) |
-| `npm run server -- --port 5174 --output-dir <path>` | API/data server only (`<path>` = `datasets/demo_viewer` for the bundled demo) |
+| `npm run dev:server -- --output-dir <path>` | API/data server for the paired `dev:web` flow — port 5174, guard off (`<path>` = `datasets/demo_viewer` for the bundled demo) |
+| `npm run server -- --output-dir <path>` | API/data server, session token required (printed on startup) |
 | `npm run dev:desktop` | Build + Electron |
 | `npm run dist:desktop` | Build + electron-builder → per-OS app file in `apps/viewer/release/` |
 | `npm run build` | Build static bundle → `dist/` |

@@ -23,6 +23,7 @@
     "predev": "node scripts/generate-version.mjs",
     "prestart": "node scripts/generate-version.mjs",
     "preserver": "node scripts/generate-version.mjs",
+    "predev:server": "node scripts/generate-version.mjs",
     "pretest": "node scripts/generate-version.mjs",
     "build": "tsc && vite build --config apps/viewer/vite.config.ts",
     "typecheck": "tsc --noEmit",
@@ -30,6 +31,8 @@
     "dev:web": "vite --config apps/viewer/vite.config.ts",
     "start": "node apps/viewer/launch.mjs",
     "server": "node apps/viewer/server.mjs",
+    "//dev:server": "API server for the paired `dev:web` flow. Vite serves its own index.html, so the frontend never receives a templated session token — hence --no-token. Safe because the server still binds loopback only AND refuses any request whose Host is not loopback (see isLoopbackHost). Never use --no-token for anything but this.",
+    "dev:server": "node apps/viewer/server.mjs --port 5174 --no-token",
     "dev:desktop": "npm run build && electron apps/viewer/desktop.mjs",
     "dist:desktop": "npm run build && electron-builder --config apps/viewer/electron-builder.yml",
     "test": "node scripts/run-tests.mjs"
