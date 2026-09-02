@@ -61,6 +61,13 @@ jobs:
       - name: Build (generate-version + tsc + vite → dist/)
         run: npm run build
 
+      # ci.yml only runs on `push: main` and `pull_request`, so NEITHER of this workflow's real
+      # triggers (a tag push, or publishing a release in the UI) had ever run the suite. A release
+      # could ship with a red test suite and nothing would have said so. Placed after the build
+      # because the frontend token-injection test reads dist/.
+      - name: Test (headless server smoke + security + sftp + built frontend)
+        run: npm test
+
       - name: Package installers and publish to the draft GitHub Release
         # electron-builder reads `publish: {provider: github}` from the yml and uploads to a
         # draft release keyed to this tag. `--publish always` uploads on every run (including
