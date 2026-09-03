@@ -49,7 +49,7 @@ async function registryChecks() {
   assert.equal(reg.get(a.id), a, 'get returns the stored source')
   assert.equal(reg.get('missing-000000000000'), null, 'get of unknown id is null')
 
-  const b = reg.add(mk('B'), { type: 'local' })
+  reg.add(mk('B'), { type: 'local' }) // registered for the list/remove assertions below; handle unused
   assert.deepEqual(reg.list().map((s) => s.label).sort(), ['A', 'B'], 'list summarises all sources')
 
   assert.equal(await reg.remove(a.id), true, 'remove returns true and closes the source')

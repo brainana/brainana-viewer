@@ -22,7 +22,7 @@ import { createAtlasPanel, type AtlasPanel, type AtlasSelection } from './panels
 import { createFunctionPanel, choiceKey, type FunctionPanel, type FunctionChoice } from './panels/function.ts'
 import { createMorphologyPanel, type MorphologyPanel, type MarkerMode } from './panels/morphology.ts'
 import { drawVisualField } from './visualFieldPlot.ts'
-import { h, errorText, selectField } from '@brainana/ui/dom.ts'
+import { h, errorText, selectField, asyncHandler } from '@brainana/ui/dom.ts'
 import { createSlider } from '@brainana/ui/components/slider.ts'
 import { mountSourcesDialog } from './dialogs/sources.ts'
 import { buildColormapAssets, availableColormaps } from '../niivue/colormaps.ts'
@@ -761,7 +761,12 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
   const paneState = (): { vol: boolean; surf: boolean } => {
     let vol = volCheck.checked
     let surf = surfCheck.checked
-    if (!vol && !surf) lastUnchecked === 'vol' ? (vol = true) : (surf = true)
+    // Both panes off is not a state the layout can render, so the one unchecked LEAST recently
+    // comes back on.
+    if (!vol && !surf) {
+      if (lastUnchecked === 'vol') vol = true
+      else surf = true
+    }
     return { vol, surf }
   }
   // Hide the unchecked pane's grid track and resize the remaining panel(s) to fill.
@@ -1029,20 +1034,23 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
   }
   syncFovControls() // welcome screen: 'best' reads as active and 'full' as unavailable until a subject loads
 
-  volSelect.addEventListener('change', async () => {
-    if (!view || !manifest) return
-    const vol = manifest.volumes[Number(volSelect.value)]
-    if (!vol) return
-    try {
-      // Only reachable in 'best' — the dropdown is disabled in 'full'.
-      if (await view.setBaseVolume(vol.url, paneState().vol ? 1 : 0)) {
-        syncVolumeControls() // re-seed the underlay rail for the switched volume's intensity range
+  volSelect.addEventListener(
+    'change',
+    asyncHandler(async () => {
+      if (!view || !manifest) return
+      const vol = manifest.volumes[Number(volSelect.value)]
+      if (!vol) return
+      try {
+        // Only reachable in 'best' — the dropdown is disabled in 'full'.
+        if (await view.setBaseVolume(vol.url, paneState().vol ? 1 : 0)) {
+          syncVolumeControls() // re-seed the underlay rail for the switched volume's intensity range
+        }
+        store.set('volumeKey', vol.key)
+      } catch {
+        // volume switch failure is non-fatal — the previous base volume stays loaded
       }
-      store.set('volumeKey', vol.key)
-    } catch {
-      // volume switch failure is non-fatal — the previous base volume stays loaded
-    }
-  })
+    }),
+  )
   surfSelect.addEventListener('change', () => {
     store.set('surfaceKind', surfSelect.value)
     void (async () => {

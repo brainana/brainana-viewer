@@ -156,8 +156,16 @@ export class MultiView {
     this.#client = client
     this.slices = niivue()
     this.render = niivue()
-    this.slices.attachToCanvas(slicesCanvas)
-    this.render.attachToCanvas(renderCanvas)
+    // KNOWN HAZARD (audit N2). attachToCanvas is async — NiiVue's own docs `await` it — but a
+    // constructor cannot. So every call below runs against an instance whose GL context may not be
+    // attached yet. It works today because NiiVue tolerates the ordering, not because we ensured
+    // it; a NiiVue upgrade could turn this into an intermittent blank canvas.
+    //
+    // The fix is to make MultiView an async factory (`static async create(...)`), which changes how
+    // the dashboard builds it. That is deliberately NOT bundled into a lint pass: this file has no
+    // test coverage, so the change needs its own commit and its own verification.
+    void this.slices.attachToCanvas(slicesCanvas)
+    void this.render.attachToCanvas(renderCanvas)
     this.slices.setSliceType(SLICE_TYPE.MULTIPLANAR)
     // The surface lives in its own RENDER instance; keep the slice montage to pure planes.
     this.slices.opts.multiplanarShowRender = SHOW_RENDER.NEVER

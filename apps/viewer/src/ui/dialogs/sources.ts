@@ -4,7 +4,7 @@ import type { RuntimeClient } from '@brainana/core-client/runtimeClient.ts'
 import type { SourceManager, SourceSummary } from '@brainana/core-client/sourceManager.ts'
 import type { FilesystemClient, SshHost } from '@brainana/core-client/filesystemClient.ts'
 import { loadRecent, rememberLocal, loadProfiles, rememberProfile, forgetProfile } from '@brainana/core-client/sessionPersistence.ts'
-import { h, field, errorText } from '@brainana/ui/dom.ts'
+import { h, field, errorText, asyncHandler } from '@brainana/ui/dom.ts'
 import { openFsPicker, FOLDER_SVG } from './fsPicker.ts'
 
 interface Deps {
@@ -130,7 +130,13 @@ export function mountSourcesDialog(deps: Deps, onChanged: () => void, onDone?: (
         })
       })
       const remove = h('button', { type: 'button', class: 'ghost sm' }, ['remove'])
-      remove.addEventListener('click', () => sources.remove(s.id).then(onChanged).catch(() => {}))
+      remove.addEventListener(
+        'click',
+        asyncHandler(async () => {
+          await sources.remove(s.id)
+          onChanged()
+        }),
+      )
       body.append(
         h('tr', {}, [
           h('td', {}, [h('span', { class: `badge ${s.type}` }, [s.type])]),
@@ -181,24 +187,27 @@ export function mountSourcesDialog(deps: Deps, onChanged: () => void, onDone?: (
   })
   const localBtn = h('button', { type: 'button', class: 'primary' }, ['add'])
   const localMsg = h('span', { class: 'msg' })
-  localBtn.addEventListener('click', async () => {
-    if (!localPath.value.trim()) return
-    localBtn.disabled = true
-    localMsg.textContent = ''
-    try {
-      const spec = { type: 'local' as const, path: localPath.value.trim() }
-      await sources.add(spec)
-      rememberLocal(spec)
-      localMsg.textContent = '✓ added'
-      localMsg.className = 'msg ok'
-      onChanged()
-    } catch (err) {
-      localMsg.textContent = errorText(err)
-      localMsg.className = 'msg error'
-    } finally {
-      localBtn.disabled = false
-    }
-  })
+  localBtn.addEventListener(
+    'click',
+    asyncHandler(async () => {
+      if (!localPath.value.trim()) return
+      localBtn.disabled = true
+      localMsg.textContent = ''
+      try {
+        const spec = { type: 'local' as const, path: localPath.value.trim() }
+        await sources.add(spec)
+        rememberLocal(spec)
+        localMsg.textContent = '✓ added'
+        localMsg.className = 'msg ok'
+        onChanged()
+      } catch (err) {
+        localMsg.textContent = errorText(err)
+        localMsg.className = 'msg error'
+      } finally {
+        localBtn.disabled = false
+      }
+    }),
+  )
 
   // remote form
   const rHost = h('input', { type: 'text', placeholder: 'host' }) as HTMLInputElement
@@ -365,40 +374,46 @@ export function mountSourcesDialog(deps: Deps, onChanged: () => void, onDone?: (
       },
     })
   })
-  remoteAddBtn.addEventListener('click', async () => {
-    const root = remotePath.value.trim()
-    if (!root || !remoteToken) return
-    remoteAddBtn.disabled = true
-    await addRemote(root)
-    remoteAddBtn.disabled = false
-  })
+  remoteAddBtn.addEventListener(
+    'click',
+    asyncHandler(async () => {
+      const root = remotePath.value.trim()
+      if (!root || !remoteToken) return
+      remoteAddBtn.disabled = true
+      await addRemote(root)
+      remoteAddBtn.disabled = false
+    }),
+  )
 
-  connectBtn.addEventListener('click', async () => {
-    if (!rHost.value.trim() || !rUser.value.trim()) return
-    connectBtn.disabled = true
-    remoteMsg.textContent = 'connecting…'
-    remoteMsg.className = 'msg'
-    try {
-      const connection = buildConnection()
-      const { token } = await files.connectRemote(connection)
-      remoteToken = token
-      // Remember the connection (no path, no password) as soon as it succeeds, and surface it.
-      rememberProfile({ host: connection.host, port: connection.port, username: connection.username })
-      renderRecall()
-      remoteMsg.textContent = ''
+  connectBtn.addEventListener(
+    'click',
+    asyncHandler(async () => {
+      if (!rHost.value.trim() || !rUser.value.trim()) return
+      connectBtn.disabled = true
+      remoteMsg.textContent = 'connecting…'
       remoteMsg.className = 'msg'
-      remoteAddMsg.textContent = ''
-      remoteAddMsg.className = 'msg'
-      connBanner.textContent = `connected to ${connection.username}@${connection.host}`
-      setConnected(true)
-      remotePath.focus()
-    } catch (err) {
-      remoteMsg.textContent = errorText(err)
-      remoteMsg.className = 'msg error'
-    } finally {
-      connectBtn.disabled = false
-    }
-  })
+      try {
+        const connection = buildConnection()
+        const { token } = await files.connectRemote(connection)
+        remoteToken = token
+        // Remember the connection (no path, no password) as soon as it succeeds, and surface it.
+        rememberProfile({ host: connection.host, port: connection.port, username: connection.username })
+        renderRecall()
+        remoteMsg.textContent = ''
+        remoteMsg.className = 'msg'
+        remoteAddMsg.textContent = ''
+        remoteAddMsg.className = 'msg'
+        connBanner.textContent = `connected to ${connection.username}@${connection.host}`
+        setConnected(true)
+        remotePath.focus()
+      } catch (err) {
+        remoteMsg.textContent = errorText(err)
+        remoteMsg.className = 'msg error'
+      } finally {
+        connectBtn.disabled = false
+      }
+    }),
+  )
   disconnectBtn.addEventListener('click', () => {
     teardownRemote()
     rPass.value = ''

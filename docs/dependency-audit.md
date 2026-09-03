@@ -72,7 +72,13 @@ and package the product but are not shipped to end users.
 
 There is **no dedicated test framework** — tests are plain `*_test.mjs` files
 run by a custom runner (`scripts/run-tests.mjs`) using the Node built-in
-`node:assert/strict`. No linter/formatter (ESLint/Prettier) is declared.
+`node:assert/strict`.
+
+**Linting** is ESLint 10 + typescript-eslint 8 (`npm run lint`, `eslint.config.js`),
+deliberately scoped to the async-misuse rules `tsc --strict` cannot see —
+`no-floating-promises`, `no-misused-promises`, `require-await` — rather than a
+broad style preset. No formatter (Prettier) is declared; `.editorconfig` carries
+the whitespace conventions.
 
 ---
 

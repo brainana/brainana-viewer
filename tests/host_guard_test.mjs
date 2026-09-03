@@ -47,7 +47,6 @@ const { server, address } = await startServer({
   manifestProvider: viewerManifestProvider,
   port: 0,
 })
-const base = `http://127.0.0.1:${address.port}`
 
 // `fetch` refuses to set Host (a forbidden header name), so the rebinding case has to be spoken
 // over raw http — which is what the attacking browser does for us in the real scenario.
