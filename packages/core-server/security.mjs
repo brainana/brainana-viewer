@@ -143,6 +143,31 @@ export function isWithinReal(resolvedRoot, candidate) {
   return isWithin(resolvedRoot, realCandidate)
 }
 
+// Containment for a path that does not exist YET — the destination of a write.
+//
+// isWithinReal cannot help here: realpath fails on a missing file, so it would refuse every new
+// file. What CAN be resolved is the nearest existing ancestor, and that is enough: a symlink can
+// only redirect through a directory that already exists. Walk up to the first ancestor that
+// resolves, canonicalise it, and require it to be inside the root — then the not-yet-created tail
+// is inside it too.
+export function isWritableWithinReal(resolvedRoot, candidate) {
+  let current = path.resolve(candidate)
+  for (;;) {
+    let real
+    try {
+      real = fs.realpathSync(current)
+    } catch {
+      const parent = path.dirname(current)
+      // Reached the filesystem root without finding anything that exists: nothing to trust.
+      if (parent === current) return false
+      current = parent
+      continue
+    }
+    // The tail below `current` does not exist yet, so containment of `current` decides it.
+    return isWithin(resolvedRoot, real)
+  }
+}
+
 // Resolve a clean relative path against an absolute root, asserting containment.
 export function resolveWithin(root, raw) {
   const clean = cleanRelative(raw)

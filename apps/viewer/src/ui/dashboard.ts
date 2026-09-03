@@ -2060,6 +2060,64 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
     morphStyle = m?.style ?? 'binary'
   }
 
+  // One-time view construction and wiring, memoized as a promise.
+  //
+  // Creating a MultiView is async (attaching NiiVue to a canvas is), so an `if (!view)` check can no
+  // longer decide this by itself: two rapid subject switches would both pass the check, each attach
+  // a second NiiVue pair to the same two canvases, and re-run every subscription below. The promise
+  // IS the guard — the first caller does the work, every later caller awaits the same result.
+  let viewReady: Promise<MultiView> | null = null
+  const ensureView = async (): Promise<MultiView> => {
+    const created = await MultiView.create(slicesCanvas, surfaceCanvas, client)
+    view = created
+    // The panes get their final flex/grid size only after this dashboard lays out; NiiVue
+    // sized its canvases against the pre-layout dimensions, leaving a first-paint artifact
+    // that only cleared when the user resized the window (fullscreen toggle, devtools). Observe
+    // the panes so the view re-fits the instant they get their real size, and on any later
+    // layout change — self-correcting, no manual resize needed.
+    const paneObserver = new ResizeObserver(() => view?.resize())
+    paneObserver.observe(slicePane)
+    paneObserver.observe(surfacePane)
+    // Colormap registry + assets are subject-independent — build once from every map NiiVue
+    // offers (brainana maps + built-ins), then mount the shared color-display section. The
+    // synthetic entry (categorical restore) is only meaningful for the atlas target. It is
+    // labelled "none" — a categorical atlas has no continuous colormap; its colors come from the
+    // per-ROI label table (the ROI list above), so the picker reads "none" with a neutral swatch.
+    const built = buildColormapRegistry(availableColormaps(created.slices))
+    colormapInfos = [{ key: LABELS_KEY, label: 'none', group: 'Brainana' }, ...built]
+    const assets = buildColormapAssets(created.slices, built.map((c) => c.key))
+    colormapGradients = { ...assets.gradients, [LABELS_KEY]: 'linear-gradient(90deg, #6b6b6b, #6b6b6b)' }
+    colormapLuts = assets.luts
+    colorDisplay = createColorDisplay(colorDisplayCallbacks, colormapGradients, colormapInfos)
+    colorDock.append(colorDisplay.element)
+    marker = new Marker(created.render)
+    // Orientation gizmo (R/L·A/P·S/I) is a permanent surface-pane widget, always shown.
+    gizmo = new OrientationGizmo(surfacePane, created.render)
+    gizmo.start()
+    syncMarkerControls()
+    created.onCrosshair((info) => {
+      lastMm = info.mm
+      lastCrosshairMm = info.mm
+      // Map the crosshair to a reference-surface node, then pin it on the displayed surface.
+      const node = created.nearestNode(info.mm)
+      if (node) {
+        currentNode = node
+        placeMarker()
+      }
+      const ijk = created.baseVox(info.mm)
+      const hemiNode = node ?? currentNode
+      coordEditor.update(info.mm, ijk, hemiNode ? (hemiNode.hemi === 0 ? 'L' : 'R') : '—')
+      updateAnatomyReport()
+      updateFunctionReport()
+      updateVisualField()
+      updateSurfaceReport()
+      updateOverlayValue()
+      // Cheap no-op once enabled; this is what un-gates "+ point" on the first crosshair move.
+      if (addPointBtn.disabled) syncReportControls()
+    })
+    return created
+  }
+
   const loadSubject = async (sourceId: string, subjectId: string): Promise<void> => {
     const label = subjectId.replace(/^sub-/, '')
     showLoading(`Loading ${label}…`)
@@ -2122,54 +2180,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
       // Decide morphology shading now — applySurface (below) builds the surface from morphDisplay().
       applyMorphSnapshot(snap?.morph ?? null, manifest)
 
-      if (!view) {
-        view = new MultiView(slicesCanvas, surfaceCanvas, client)
-        // The panes get their final flex/grid size only after this dashboard lays out; NiiVue
-        // sized its canvases against the pre-layout dimensions, leaving a first-paint artifact
-        // that only cleared when the user resized the window (fullscreen toggle, devtools). Observe
-        // the panes so the view re-fits the instant they get their real size, and on any later
-        // layout change — self-correcting, no manual resize needed.
-        const paneObserver = new ResizeObserver(() => view?.resize())
-        paneObserver.observe(slicePane)
-        paneObserver.observe(surfacePane)
-        // Colormap registry + assets are subject-independent — build once from every map NiiVue
-        // offers (brainana maps + built-ins), then mount the shared color-display section. The
-        // synthetic entry (categorical restore) is only meaningful for the atlas target. It is
-        // labelled "none" — a categorical atlas has no continuous colormap; its colors come from the
-        // per-ROI label table (the ROI list above), so the picker reads "none" with a neutral swatch.
-        const built = buildColormapRegistry(availableColormaps(view.slices))
-        colormapInfos = [{ key: LABELS_KEY, label: 'none', group: 'Brainana' }, ...built]
-        const assets = buildColormapAssets(view.slices, built.map((c) => c.key))
-        colormapGradients = { ...assets.gradients, [LABELS_KEY]: 'linear-gradient(90deg, #6b6b6b, #6b6b6b)' }
-        colormapLuts = assets.luts
-        colorDisplay = createColorDisplay(colorDisplayCallbacks, colormapGradients, colormapInfos)
-        colorDock.append(colorDisplay.element)
-        marker = new Marker(view.render)
-        // Orientation gizmo (R/L·A/P·S/I) is a permanent surface-pane widget, always shown.
-        gizmo = new OrientationGizmo(surfacePane, view.render)
-        gizmo.start()
-        syncMarkerControls()
-        view.onCrosshair((info) => {
-          lastMm = info.mm
-          lastCrosshairMm = info.mm
-          // Map the crosshair to a reference-surface node, then pin it on the displayed surface.
-          const node = view!.nearestNode(info.mm)
-          if (node) {
-            currentNode = node
-            placeMarker()
-          }
-          const ijk = view!.baseVox(info.mm)
-          const hemiNode = node ?? currentNode
-          coordEditor.update(info.mm, ijk, hemiNode ? (hemiNode.hemi === 0 ? 'L' : 'R') : '—')
-          updateAnatomyReport()
-          updateFunctionReport()
-          updateVisualField()
-          updateSurfaceReport()
-          updateOverlayValue()
-          // Cheap no-op once enabled; this is what un-gates "+ point" on the first crosshair move.
-          if (addPointBtn.disabled) syncReportControls()
-        })
-      }
+      view = await (viewReady ??= ensureView())
 
       // Apply the sticky fov preference to the incoming subject. It degrades to 'best' when this
       // dataset has no full-FOV volume, without clearing the preference, so a later subject that
