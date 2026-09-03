@@ -2,7 +2,7 @@
 // remote) and the report's save destination (browsing inside a data source). It knows nothing about
 // either: the caller injects a `browse` function returning {path, entries}, so any directory-listing
 // backend can drive it.
-import { h, errorText } from '@brainana/ui/dom.ts'
+import { h, errorText, dismissOnBackdrop } from '@brainana/ui/dom.ts'
 
 // Folder glyph reused by the Browse buttons and by each folder row in the picker (no shared icon set).
 export const FOLDER_SVG =
@@ -41,9 +41,7 @@ export function openFsPicker({ title, start, browse, onPick, onClose, rootLabel 
     overlay.remove()
     onClose?.()
   }
-  overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) close()
-  })
+  dismissOnBackdrop(overlay, close)
 
   let current = ''
   // A source-relative picker represents its root as the empty string, so "has a folder loaded"

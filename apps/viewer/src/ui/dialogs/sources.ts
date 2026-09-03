@@ -4,7 +4,7 @@ import type { RuntimeClient } from '@brainana/core-client/runtimeClient.ts'
 import type { SourceManager, SourceSummary } from '@brainana/core-client/sourceManager.ts'
 import type { FilesystemClient, SshHost } from '@brainana/core-client/filesystemClient.ts'
 import { loadRecent, rememberLocal, loadProfiles, rememberProfile, forgetProfile } from '@brainana/core-client/sessionPersistence.ts'
-import { h, field, errorText, asyncHandler } from '@brainana/ui/dom.ts'
+import { h, field, errorText, asyncHandler, dismissOnBackdrop } from '@brainana/ui/dom.ts'
 import { openFsPicker, FOLDER_SVG } from './fsPicker.ts'
 
 interface Deps {
@@ -55,9 +55,7 @@ export function mountSourcesDialog(deps: Deps, onChanged: () => void, onDone?: (
     unsub()
     overlay.remove()
   }
-  overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) close()
-  })
+  dismissOnBackdrop(overlay, close)
 
   // Header dismiss: a plain "close" that always just closes. The next-step primary action lives in
   // the footer (`continueBtn`), enabled once a dataset exists.

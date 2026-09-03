@@ -49,6 +49,32 @@ export function selectField(labelText: string, options: SelectOption[], onChange
   }
 }
 
+/**
+ * Wire an overlay's click-the-backdrop-to-dismiss, for a dialog mounted as `.overlay > .dialog`.
+ *
+ * Testing the click's target alone is wrong. A `click` is dispatched at the nearest common ancestor
+ * of its mousedown and mouseup targets, so a drag that STARTS inside the dialog — sweeping to select
+ * the text in a field, and overshooting the dialog's edge — reports the overlay itself as the click
+ * target and dismissed the dialog mid-gesture, discarding whatever the user had typed. The reverse
+ * drag (press on the backdrop, release inside) reports the overlay too.
+ *
+ * So require the gesture to have both begun and ended on the backdrop. Acting on mouseup rather than
+ * click is what makes that checkable: by click time the two ends are already collapsed into one
+ * ancestor target.
+ */
+export function dismissOnBackdrop(overlay: HTMLElement, close: () => void): void {
+  let downOnBackdrop = false
+  // Every mousedown inside the dialog bubbles to the overlay too, so this re-arms on each press.
+  overlay.addEventListener('mousedown', (e) => {
+    downOnBackdrop = e.target === overlay
+  })
+  overlay.addEventListener('mouseup', (e) => {
+    const dismiss = downOnBackdrop && e.target === overlay
+    downOnBackdrop = false
+    if (dismiss) close()
+  })
+}
+
 export function errorText(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }

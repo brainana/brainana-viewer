@@ -2,7 +2,7 @@
 // destination, and generate. Download is preselected — it is the destination that works the same in
 // every runtime — with "save into the dataset" available for keeping the report beside the data
 // (including on a remote SFTP source, which the server-side export path handles identically).
-import { h, field, errorText } from '@brainana/ui/dom.ts'
+import { h, field, errorText, dismissOnBackdrop } from '@brainana/ui/dom.ts'
 import { ServerExport, downloadBlob } from '@brainana/core-client/exportDestination.ts'
 import type { RuntimeClient } from '@brainana/core-client/runtimeClient.ts'
 import { openFsPicker } from '../ui/dialogs/fsPicker.ts'
@@ -43,9 +43,7 @@ export function mountReportDialog(deps: ReportDialogDeps): void {
     unsubscribe()
     overlay.remove()
   }
-  overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) close()
-  })
+  dismissOnBackdrop(overlay, close)
 
   // --- bookmark list ---
   const pointList = h('div', { class: 'report-points' })
