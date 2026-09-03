@@ -197,6 +197,16 @@ export function createServer({ token = null, distRoot = null, initialSources = [
   // token -> { client, lastUsed }. Cleaned up on disconnect, on idle timeout, and on server close.
   // These are the viewer server's own sockets — unrelated to any pipeline process/scratch cleanup.
   const remoteBrowsers = new Map()
+  // Header, never a query parameter. A browse token authorises directory listing over a live,
+  // authenticated SSH connection, so it is the same class of secret as the session token — and
+  // security.mjs already spells out why those must not ride in a URL: server logs, the Referer
+  // header, browser history. Declared here and mirrored in core-client's filesystemClient.ts;
+  // core-client is browser code and cannot import a server module to share the constant.
+  const REMOTE_TOKEN_HEADER = 'x-brainana-remote-token'
+  const remoteBrowseToken = (req) => {
+    const value = req.headers[REMOTE_TOKEN_HEADER]
+    return typeof value === 'string' && value ? value.trim() : ''
+  }
   const REMOTE_BROWSE_TTL_MS = 10 * 60 * 1000
   const sweepRemoteBrowsers = () => {
     const now = Date.now()
@@ -395,7 +405,7 @@ export function createServer({ token = null, distRoot = null, initialSources = [
       }
       if (pathname === '/api/remote/browse' && req.method === 'GET') {
         sweepRemoteBrowsers()
-        const entry = remoteBrowsers.get(url.searchParams.get('token') || '')
+        const entry = remoteBrowsers.get(remoteBrowseToken(req))
         if (!entry) return sendJson(res, 404, { error: 'Not connected (session expired). Reconnect and try again.' })
         entry.lastUsed = Date.now()
         try {
@@ -407,10 +417,10 @@ export function createServer({ token = null, distRoot = null, initialSources = [
         }
       }
       if (pathname === '/api/remote/disconnect' && req.method === 'POST') {
-        const { token } = await jsonBody(req).catch(() => ({}))
-        const entry = token && remoteBrowsers.get(token)
+        const browseToken = remoteBrowseToken(req)
+        const entry = browseToken && remoteBrowsers.get(browseToken)
         if (entry) {
-          remoteBrowsers.delete(token)
+          remoteBrowsers.delete(browseToken)
           entry.client.close().catch(() => {})
         }
         return sendJson(res, 200, { ok: true })

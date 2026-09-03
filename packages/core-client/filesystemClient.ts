@@ -63,6 +63,13 @@ export interface SshHost {
 // The manifest shape is broad and consumed structurally by the viewer; keep it open here.
 export type Manifest = Record<string, unknown> & { id: string; label: string; session: string | null }
 
+// Transport for the remote-browse token: a header, never a query parameter. That token authorises
+// directory listing over a live authenticated SSH connection, so it is the same class of secret as
+// the session token, and runtimeClient.ts/security.mjs already state why those must stay out of
+// URLs (server logs, Referer, browser history). Mirrored in core-server's runtime.mjs — this is
+// browser code and cannot import a server module to share the constant.
+const REMOTE_TOKEN_HEADER = 'X-Brainana-Remote-Token'
+
 export class FilesystemClient {
   #client: RuntimeClient
 
@@ -111,15 +118,16 @@ export class FilesystemClient {
   // List directories under an absolute remote path on an open connection. Empty `abs` starts at the
   // remote home directory (server-resolved). Same shape as browseFs so the picker is shared.
   browseRemote(token: string, abs = ''): Promise<BrowseListing> {
-    return this.#client.apiJson(`/api/remote/browse?token=${encodeURIComponent(token)}&path=${encodeURIComponent(abs)}`)
+    return this.#client.apiJson(`/api/remote/browse?path=${encodeURIComponent(abs)}`, {
+      headers: { [REMOTE_TOKEN_HEADER]: token },
+    })
   }
 
   // Close a pre-add remote browse session (best-effort; frees the server-side SFTP socket).
   disconnectRemote(token: string): Promise<{ ok: boolean }> {
     return this.#client.apiJson('/api/remote/disconnect', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token }),
+      headers: { [REMOTE_TOKEN_HEADER]: token },
     })
   }
 }

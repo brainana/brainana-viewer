@@ -26,13 +26,20 @@ ok('timingSafeEqual handles equal, unequal, and length-mismatch inputs')
 // --- guard ---
 const guard = createTokenGuard(token)
 const reqWith = (t) => ({ headers: t ? { authorization: `Bearer ${t}` } : {} })
-assert.equal(guard(reqWith(token), new URL('http://x/api/x')), true)
-assert.equal(guard(reqWith('nope'), new URL('http://x/api/x')), false)
-assert.equal(guard(reqWith(null), new URL('http://x/api/x')), false)
-// header source is accepted; a ?token= query param is deliberately NOT (keeps the token out of URLs/history)
-assert.equal(guard({ headers: { 'x-brainana-token': token } }, new URL('http://x/')), true)
-assert.equal(guard({ headers: {} }, new URL(`http://x/?token=${token}`)), false, '?token= query param is rejected')
-ok('createTokenGuard accepts bearer + header token; rejects query token and wrong/absent')
+assert.equal(guard(reqWith(token)), true)
+assert.equal(guard(reqWith('nope')), false)
+assert.equal(guard(reqWith(null)), false)
+assert.equal(guard({ headers: { 'x-brainana-token': token } }), true)
+ok('createTokenGuard accepts a bearer or x-brainana-token header, and rejects wrong/absent')
+
+// The guard reads ONLY `req` — it is given no URL and therefore cannot consult a query string,
+// which is how "?token= is never accepted" is enforced structurally rather than by a check.
+// This used to be asserted by passing a URL as a second argument and expecting false; that
+// argument was silently discarded, so the assertion merely re-tested the no-headers case above and
+// would have passed whatever the policy were. The real property is asserted end-to-end against a
+// running server in token_transport_test.mjs.
+assert.equal(createTokenGuard(token).length, 1, 'the guard takes req alone, so a query string is unreachable to it')
+ok('the guard has no access to the request URL by construction')
 
 const openGuard = createTokenGuard(null)
 assert.equal(openGuard({ headers: {} }, new URL('http://x/')), true, 'null token disables the guard')
