@@ -18,6 +18,7 @@ import { SourceRegistry, SOURCE_ID_PATTERN, summarizeSource } from './dataSource
 import { LocalDataSource } from './localSource.mjs'
 import { SftpDataSource } from './sftpSource.mjs'
 import { SftpClient } from './sftpClient.mjs'
+import { cacheUsage, reclaimCachedFiles } from './cache.mjs'
 import { createTokenGuard, isWithin, isLoopbackHost, TOKEN_COOKIE } from './security.mjs'
 import { versionInfo } from './version.mjs'
 
@@ -424,6 +425,20 @@ export function createServer({ token = null, distRoot = null, initialSources = [
           entry.client.close().catch(() => {})
         }
         return sendJson(res, 200, { ok: true })
+      }
+
+      // ---- Cache administration ----
+      // The cache holds whole volumes and never evicts (audit M6). No LRU policy yet; this is the
+      // escape hatch: see the size, reclaim the fetched bytes. Reclaiming keeps every mirror, so an
+      // open source keeps working and simply re-fetches on the next read.
+      if (pathname === '/api/cache' && req.method === 'GET') {
+        return sendJson(res, 200, await cacheUsage(serverCacheRoot))
+      }
+      if (pathname === '/api/cache' && req.method === 'DELETE') {
+        // Both shapes carry a `bytes` field, so name the freed figure explicitly rather than
+        // spreading them together and letting the usage total silently win.
+        const { bytes: freedBytes } = await reclaimCachedFiles(serverCacheRoot)
+        return sendJson(res, 200, { freedBytes, ...(await cacheUsage(serverCacheRoot)) })
       }
 
       // ---- Source registry ----

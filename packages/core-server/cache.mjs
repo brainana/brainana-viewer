@@ -57,3 +57,82 @@ export class RemoteFileCache {
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// Cache administration
+// ---------------------------------------------------------------------------
+//
+// The cache has no eviction policy: it holds whole neuroimaging volumes and grows until something
+// else fills the disk. Real LRU eviction is a bigger design question (what is hot? across how many
+// sources?) and is deliberately not attempted here. What IS provided is the escape hatch — see the
+// size, and reclaim it — which is what turns an invisible problem into a manageable one.
+
+// Recursively total the bytes under a directory. Missing directories count as zero, and an
+// unreadable entry is skipped rather than aborting the walk: this is a size report, and a partial
+// number is far more useful than an exception.
+async function dirSize(dir) {
+  let total = 0
+  let entries
+  try {
+    entries = await fsp.readdir(dir, { withFileTypes: true })
+  } catch {
+    return 0
+  }
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name)
+    try {
+      if (entry.isDirectory()) total += await dirSize(full)
+      else if (entry.isFile()) total += (await fsp.stat(full)).size
+    } catch {
+      // vanished mid-walk, or unreadable — skip it
+    }
+  }
+  return total
+}
+
+// Every `files/` directory under the cache root: one per remote source, holding fetched bytes.
+// These are the reclaimable part. `mirror/` is NOT — it carries the placeholder tree and the
+// materialised surface binaries buildManifest parses, so deleting it would break an open source
+// until the next manifest build.
+async function fileStores(cacheRoot) {
+  const found = []
+  const walk = async (dir, depth) => {
+    if (depth < 0) return
+    let entries
+    try {
+      entries = await fsp.readdir(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      if (entry.name === 'mirror') continue // never descend into a mirror
+      const full = path.join(dir, entry.name)
+      if (entry.name === 'files') found.push(full)
+      else await walk(full, depth - 1)
+    }
+  }
+  await walk(cacheRoot, 4)
+  return found
+}
+
+/** Total and reclaimable size of the cache tree. Never throws; an absent root reports zero. */
+export async function cacheUsage(cacheRoot) {
+  const bytes = await dirSize(cacheRoot)
+  let reclaimableBytes = 0
+  for (const store of await fileStores(cacheRoot)) reclaimableBytes += await dirSize(store)
+  return { path: cacheRoot, bytes, reclaimableBytes }
+}
+
+/**
+ * Delete the fetched file bytes, keeping every mirror intact. Safe to call while sources are open:
+ * openFile re-fetches whatever it needs on the next read, so the cost is time, never correctness.
+ */
+export async function reclaimCachedFiles(cacheRoot) {
+  let freed = 0
+  for (const store of await fileStores(cacheRoot)) {
+    freed += await dirSize(store)
+    await fsp.rm(store, { recursive: true, force: true }).catch(() => {})
+  }
+  return { bytes: freed }
+}

@@ -51,6 +51,15 @@ export interface BrowseListing {
   entries: BrowseEntry[]
 }
 
+export interface CacheUsage {
+  /** Absolute path of the cache root on the server machine. */
+  path: string
+  /** Everything under it, including the mirrors. */
+  bytes: number
+  /** Just the fetched file bytes — what `reclaimCache()` would free. */
+  reclaimableBytes: number
+}
+
 // A host parsed from the server user's ~/.ssh/config, offered as a recall option in the remote
 // connect form. `host` is the alias; `hostName` is the real address when the config specifies one.
 export interface SshHost {
@@ -97,6 +106,18 @@ export class FilesystemClient {
   // no source yet). Empty `abs` lets the server default to its home directory.
   browseFs(abs = ''): Promise<BrowseListing> {
     return this.#client.apiJson(`/api/fs/browse?path=${encodeURIComponent(abs)}`)
+  }
+
+  // Size of the remote-file cache. It has no eviction policy, so this is how a user finds out it
+  // has grown (audit M6).
+  cacheUsage(): Promise<CacheUsage> {
+    return this.#client.apiJson('/api/cache')
+  }
+
+  // Free the fetched file bytes, keeping every mirror. Open sources keep working and re-fetch on
+  // their next read, so this costs time rather than correctness.
+  reclaimCache(): Promise<CacheUsage & { freedBytes: number }> {
+    return this.#client.apiJson('/api/cache', { method: 'DELETE' })
   }
 
   // Known hosts from the server user's ~/.ssh/config, to seed the remote-connect recall dropdown.

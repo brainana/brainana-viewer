@@ -428,6 +428,51 @@ export function mountSourcesDialog(deps: Deps, onChanged: () => void, onDone?: (
   const portField = field('port', rPort)
   portField.classList.add('port-field')
 
+  // --- cache readout (audit M6) ---------------------------------------------------------------
+  // The remote-file cache holds whole volumes and never evicts, so without a readout it grows
+  // invisibly. Reclaiming frees the fetched bytes only — mirrors stay, so open sources keep working
+  // and re-fetch on their next read.
+  const cacheStatus = h('span', { class: 'msg muted' })
+  const clearCacheBtn = h('button', { type: 'button', class: 'ghost' }, ['clear cache']) as HTMLButtonElement
+  clearCacheBtn.hidden = true
+
+  const formatBytes = (bytes: number): string => {
+    if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
+    const units = ['B', 'KB', 'MB', 'GB', 'TB']
+    const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)))
+    return `${(bytes / 1024 ** i).toFixed(i === 0 ? 0 : 1)} ${units[i]}`
+  }
+
+  const refreshCacheStatus = async (): Promise<void> => {
+    try {
+      const usage = await files.cacheUsage()
+      cacheStatus.textContent = `cache ${formatBytes(usage.bytes)}`
+      cacheStatus.title = `Remote-file cache at ${usage.path}\n${formatBytes(usage.reclaimableBytes)} can be reclaimed without affecting open datasets.`
+      // Nothing worth reclaiming is not worth a button.
+      clearCacheBtn.hidden = usage.reclaimableBytes <= 0
+    } catch {
+      // A server that cannot report its cache is not a reason to block the dialog.
+      cacheStatus.textContent = ''
+      clearCacheBtn.hidden = true
+    }
+  }
+
+  clearCacheBtn.addEventListener(
+    'click',
+    asyncHandler(async () => {
+      clearCacheBtn.disabled = true
+      try {
+        const result = await files.reclaimCache()
+        cacheStatus.textContent = `freed ${formatBytes(result.freedBytes)} · cache ${formatBytes(result.bytes)}`
+        clearCacheBtn.hidden = result.reclaimableBytes <= 0
+      } catch (err) {
+        cacheStatus.textContent = errorText(err)
+      } finally {
+        clearCacheBtn.disabled = false
+      }
+    }),
+  )
+
   const dialog = h('div', { class: 'dialog' }, [
     h('div', { class: 'dialog-head' }, [h('h2', {}, ['datasets']), h('span', { class: 'spacer' }), closeBtn]),
     list,
@@ -451,8 +496,9 @@ export function mountSourcesDialog(deps: Deps, onChanged: () => void, onDone?: (
         remoteAddMsg,
       ]),
     ]),
-    h('div', { class: 'dialog-foot' }, [h('span', { class: 'spacer' }), continueBtn]),
+      h('div', { class: 'dialog-foot' }, [cacheStatus, clearCacheBtn, h('span', { class: 'spacer' }), continueBtn]),
   ])
+  void refreshCacheStatus()
   setConnected(false) // start disconnected: hide disconnect/add-row/banner
   overlay.append(dialog)
   document.body.append(overlay)
