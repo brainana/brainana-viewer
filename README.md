@@ -7,7 +7,7 @@
 **Brainana Viewer** is a free, cross-platform desktop app for exploring **macaque (monkey) brain MRI**.
 
 View anatomical volumes, 3D cortical surfaces, atlases, and functional maps produced by the
-[**Brainana**](https://github.com/xingyu-liu/brainana) preprocessing pipeline
+[**Brainana**](https://github.com/brainana/brainana) preprocessing pipeline
 ([preprint](https://www.biorxiv.org/content/10.64898/2026.06.03.729972v1)).
 Built on [NiiVue](https://github.com/niivue/niivue) + WebGL2, it runs on **macOS, Windows, and Linux**.
 
@@ -108,34 +108,26 @@ On older git, clone the whole repo instead: `git clone https://github.com/braina
 
 ## Generate a report
 
-The **report** controls sit at the top right of the toolbar, under the category tabs.
+Once a subject is loaded, the **points** panel on the left rail (below **underlay**) holds the
+report controls.
 
-1. **Bookmark the locations you care about.** Move the crosshair to a spot and click **+ point**.
-   The readouts are captured at that moment — every atlas's region, the morphometry at the nearest
-   vertex, and the retinotopy or somatotopy values — so a point keeps what was on screen even after
-   you switch overlays. The counter beside the button shows how many points you have.
-2. **Click report.** The dialog lists your points (rename or remove them there), lets you include or
-   skip screenshots, and asks where to put the file.
-3. **Choose a destination.** **Download** is the default and behaves the same in the browser and the
-   desktop app. Or pick **save into the dataset** to write the report next to your data — this works
-   for remote datasets too, since the save happens server-side.
+1. **Bookmark locations.** Move the crosshair and click **+ point**. Atlas, morphometry, and
+   retinotopy/somatotopy readouts are captured at that moment and stay with the point when you switch
+   overlays. Use the **bookmarked** list to rename points, jump back to them, or remove them.
+2. **Click generate report…** Review your points, choose whether to include screenshots, and pick where
+   to save.
+3. **Choose a destination.** **Download** is the default (browser and desktop). **Save into the
+   dataset** writes next to your data, including remote datasets (server-side save).
 
-The result is a single self-contained `.html` file: it embeds its own styling and images, loads
-nothing over the network, and contains no scripts, so it opens years later on any machine and prints
-cleanly. It documents
+The result is a self-contained `.html` file: embedded styling and images, no network loads, no
+scripts. See an [example report](docs/_static/brainana-viewer_report_example.html). It documents
 
-- **where the data came from** — the path of every loaded file, its key NIfTI header fields (n_dim,
-  dimensions, resolution, datatype, intent, scaling, and the voxel→world affine), and the version of
-  the **brainana** pipeline that produced it, read from each file's JSON sidecar;
-- **how it was displayed** — layout, overlays, colormaps, display ranges, clips, thresholds, camera;
-- **what you selected** — the current crosshair and every bookmarked point, in full;
-- **what it looked like** — the slice montage and 3D surface, plus a pair of images per point.
+- **Data provenance:** file paths, key NIfTI header fields, and **brainana** pipeline version from
+  JSON sidecars;
+- **Selections:** crosshair and bookmarked points;
+- **Screenshots:** slice montage, 3D surface, and images per point.
 
-Bookmarked points are coordinates in one subject's space, so switching monkeys clears them.
-
-> [!TIP]
-> The report also embeds its own data as JSON (in a `<script type="application/json">` block at the
-> end of the file), so a report can be parsed back into a table by a script.
+Bookmarked points are in subject space; switching monkeys clears them.
 
 ---
 
@@ -145,7 +137,7 @@ If you use the Brainana Viewer or the Brainana pipeline in your research, please
 Brainana preprint and link the software:
 
 - **Paper:** [preprint](https://www.biorxiv.org/content/10.64898/2026.06.03.729972v1)
-- **Preprocessing pipeline:** [![xingyu-liu/brainana on GitHub](https://img.shields.io/badge/GitHub-xingyu--liu%2Fbrainana-181717?logo=github)](https://github.com/xingyu-liu/brainana)
+- **Preprocessing pipeline:** [![brainana/brainana on GitHub](https://img.shields.io/badge/GitHub-brainana%2Fbrainana-181717?logo=github)](https://github.com/brainana/brainana)
 - **Viewer:** this repository.
 
 ## Acknowledgements & references
@@ -171,4 +163,4 @@ The Viewer is built on the shoulders of excellent open-source work. The key piec
 ## License
 
 Licensed under the **GNU Affero General Public License v3.0** (AGPL-3.0), the same license
-as the parent [**Brainana**](https://github.com/xingyu-liu/brainana) pipeline. See [LICENSE](LICENSE).
+as the parent [**Brainana**](https://github.com/brainana/brainana) pipeline. See [LICENSE](LICENSE).
