@@ -64,8 +64,71 @@ try {
   assert.equal(await readAll('sub-x/anat/real.nii.gz'), 'LEGITIMATE-DATA')
   ok('ordinary files are unaffected')
 } finally {
+
+  // --- the reported root is the path the CALLER gave, not its canonical form -------------------
+  // Containment has to compare canonical paths, but `root` is also the user-facing path: it is what
+  // summarizeSource returns, what the sources dialog shows, and what the report prints. Resolving
+  // symlinks for the security check must not rewrite it.
+  //
+  // This is exactly what broke macOS CI: /var is a symlink to /private/var, so realpath'ing the root
+  // made a source opened at /var/folders/... report itself as /private/var/folders/... .
+  {
+    const realDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'brainana-symlink-real-'))
+    await fsp.mkdir(path.join(realDir, 'sub-y', 'anat'), { recursive: true })
+    await fsp.writeFile(path.join(realDir, 'sub-y', 'anat', 'v.nii.gz'), 'INSIDE')
+
+    // A root reached THROUGH a symlink, the way /var/... is on macOS.
+    const linkedRoot = path.join(os.tmpdir(), `brainana-symlink-alias-${process.pid}`)
+    await fsp.rm(linkedRoot, { recursive: true, force: true })
+    fs.symlinkSync(realDir, linkedRoot, 'dir')
+    try {
+      const linked = new LocalDataSource({ id: 'local-bbbbbbbbbbbb', root: linkedRoot, manifest: viewerManifestProvider })
+      assert.equal(linked.root, linkedRoot, 'root reports the path it was given, not the resolved one')
+
+      // ...and containment still works through it, in both directions.
+      const opened = await linked.openFile('sub-y/anat/v.nii.gz')
+      const chunks = []
+      for await (const c of opened.stream) chunks.push(c)
+      assert.equal(Buffer.concat(chunks).toString('utf8'), 'INSIDE', 'files under a symlinked root are still served')
+
+      fs.symlinkSync(path.join(outside, 'secret.nii.gz'), path.join(realDir, 'escape.nii.gz'))
+      await assert.rejects(async () => {
+        const bad = await linked.openFile('escape.nii.gz')
+        for await (const chunk of bad.stream) void chunk // drain
+      }, /not found|outside/i, 'and an escape through a symlinked root is still refused')
+      ok('a root reached through a symlink keeps its given path AND stays contained')
+    } finally {
+      await fsp.rm(linkedRoot, { recursive: true, force: true })
+      await fsp.rm(realDir, { recursive: true, force: true })
+    }
+  }
+
+  // --- writes must be contained too --------------------------------------------------------------
+  // resolveWithin (used by saveFile/mkdir) is LEXICAL, like isWithin was. Reads were fixed above;
+  // a write that escapes is strictly worse, since it creates files outside the root rather than
+  // merely reading them.
+  {
+    const { Readable } = await import('node:stream')
+    await assert.rejects(
+      () => source.saveFile('escapedir/written.txt', Readable.from(['pwned']), { overwrite: true }),
+      /not found|outside/i,
+      'saveFile through a directory symlink that leaves the root is refused',
+    )
+    assert.equal(fs.existsSync(path.join(outside, 'secretdir', 'written.txt')), false, 'and nothing is written outside')
+    ok('saveFile refuses to write through a symlink that leaves the root')
+
+    await assert.rejects(() => source.mkdir('escapedir/newdir'), /not found|outside/i)
+    assert.equal(fs.existsSync(path.join(outside, 'secretdir', 'newdir')), false)
+    ok('mkdir refuses to create a directory outside the root')
+
+    // Ordinary writes inside the root still work.
+    const saved = await source.saveFile('sub-x/anat/exported.txt', Readable.from(['ok']), { overwrite: true })
+    assert.equal(saved.path, 'sub-x/anat/exported.txt')
+    assert.equal(fs.readFileSync(path.join(root, 'sub-x', 'anat', 'exported.txt'), 'utf8'), 'ok')
+    ok('a normal write inside the root is unaffected')
+  }
+
   await fsp.rm(root, { recursive: true, force: true })
   await fsp.rm(outside, { recursive: true, force: true })
 }
-
 console.log(`\nsymlink_containment: ${passed} checks passed`)
