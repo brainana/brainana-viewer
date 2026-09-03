@@ -107,6 +107,40 @@ function niivue(): Niivue {
   return new Niivue({ backColor: [0, 0, 0, 1], show3Dcrosshair: false, isColorbar: false, dragAndDropEnabled: false })
 }
 
+/**
+ * Attach a slices/render NiiVue pair to their canvases and apply the viewer's display settings.
+ *
+ * Both attachments are awaited BEFORE anything is configured. attachToCanvas establishes the GL
+ * context; writing `opts` or calling setSliceType against an unattached instance is undefined
+ * territory that merely happens to work today.
+ *
+ * Takes the instances rather than creating them so the ordering is testable without a GL context.
+ */
+export async function initNiivuePair(
+  slices: Niivue,
+  render: Niivue,
+  slicesCanvas: HTMLCanvasElement,
+  renderCanvas: HTMLCanvasElement,
+): Promise<void> {
+  // In parallel: they are independent contexts and this is the slow part of startup.
+  await Promise.all([slices.attachToCanvas(slicesCanvas), render.attachToCanvas(renderCanvas)])
+
+  slices.setSliceType(SLICE_TYPE.MULTIPLANAR)
+  // The surface lives in its own RENDER instance; keep the slice montage to pure planes.
+  slices.opts.multiplanarShowRender = SHOW_RENDER.NEVER
+  render.setSliceType(SLICE_TYPE.RENDER)
+  render.opts.isOrientCube = false
+  // Never draw NiiVue's on-canvas mesh legend (hundreds of ARM labels = far too busy).
+  render.opts.showLegend = false
+  slices.opts.showLegend = false
+  // Crosshair tinted green (--ok #8bbf6e) rather than NiiVue's default red: legible against the
+  // warm/gold overlays and distinct from the gold surface marker.
+  slices.opts.crosshairColor = [0.545, 0.749, 0.431, 1]
+  render.opts.crosshairColor = [0.545, 0.749, 0.431, 1]
+  registerColormaps(slices)
+  registerColormaps(render)
+}
+
 export class MultiView {
   readonly slices: Niivue
   readonly render: Niivue
@@ -152,34 +186,27 @@ export class MultiView {
     report: new Map(),
   }
 
-  constructor(slicesCanvas: HTMLCanvasElement, renderCanvas: HTMLCanvasElement, client: RuntimeClient) {
+  /**
+   * Build a MultiView. Async because attaching to a canvas is.
+   *
+   * Replaces `new MultiView(...)`: a constructor cannot await, and the attachment genuinely has to
+   * complete before anything is configured or loaded.
+   */
+  static async create(slicesCanvas: HTMLCanvasElement, renderCanvas: HTMLCanvasElement, client: RuntimeClient): Promise<MultiView> {
+    const slices = niivue()
+    const render = niivue()
+    await initNiivuePair(slices, render, slicesCanvas, renderCanvas)
+    return new MultiView(slices, render, client)
+  }
+
+  /**
+   * Private: instances arrive already attached and configured, from create(). Everything here is
+   * pure wiring that needs no GL context.
+   */
+  private constructor(slices: Niivue, render: Niivue, client: RuntimeClient) {
     this.#client = client
-    this.slices = niivue()
-    this.render = niivue()
-    // KNOWN HAZARD (audit N2). attachToCanvas is async — NiiVue's own docs `await` it — but a
-    // constructor cannot. So every call below runs against an instance whose GL context may not be
-    // attached yet. It works today because NiiVue tolerates the ordering, not because we ensured
-    // it; a NiiVue upgrade could turn this into an intermittent blank canvas.
-    //
-    // The fix is to make MultiView an async factory (`static async create(...)`), which changes how
-    // the dashboard builds it. That is deliberately NOT bundled into a lint pass: this file has no
-    // test coverage, so the change needs its own commit and its own verification.
-    void this.slices.attachToCanvas(slicesCanvas)
-    void this.render.attachToCanvas(renderCanvas)
-    this.slices.setSliceType(SLICE_TYPE.MULTIPLANAR)
-    // The surface lives in its own RENDER instance; keep the slice montage to pure planes.
-    this.slices.opts.multiplanarShowRender = SHOW_RENDER.NEVER
-    this.render.setSliceType(SLICE_TYPE.RENDER)
-    this.render.opts.isOrientCube = false
-    // Never draw NiiVue's on-canvas mesh legend (hundreds of ARM labels = far too busy).
-    this.render.opts.showLegend = false
-    this.slices.opts.showLegend = false
-    // Crosshair tinted green (--ok #8bbf6e) rather than NiiVue's default red: legible against the
-    // warm/gold overlays and distinct from the gold surface marker.
-    this.slices.opts.crosshairColor = [0.545, 0.749, 0.431, 1]
-    this.render.opts.crosshairColor = [0.545, 0.749, 0.431, 1]
-    registerColormaps(this.slices)
-    registerColormaps(this.render)
+    this.slices = slices
+    this.render = render
 
     // Manual crosshair coupling (Align pattern): each instance mirrors the world coord to the
     // other via mm2frac; a suppress flag cleared on the next rAF prevents feedback loops.
