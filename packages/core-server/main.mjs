@@ -8,7 +8,6 @@
 //   --no-token            disable the session-token guard entirely (loopback bind only)
 //   --dist <path>         static assets dir to serve (default: the app's distRoot, if any)
 //   --cache-dir <path>    remote-file cache root (default: per-OS cache dir for cacheApp)
-//   --legacy              enable legacy-compat unscoped data route for the old bundle
 import path from 'node:path'
 import { startServer } from './runtime.mjs'
 import { generateSessionToken } from './security.mjs'
@@ -44,7 +43,6 @@ export async function runServerCli({ manifestProvider, appLabel = 'Brainana', ca
   const token = resolveServerToken({ tokenArg: arg('--token', null), envToken: process.env.BRAINANA_TOKEN || null, noToken: hasFlag('--no-token') })
   const distArg = arg('--dist', null)
   const resolvedDist = distArg ? path.resolve(distArg) : distRoot
-  const legacyCompat = hasFlag('--legacy') || process.env.BRAINANA_LEGACY === '1'
 
   const initialSources = outputDir ? [{ type: 'local', path: path.resolve(outputDir), label: path.basename(path.resolve(outputDir)) }] : []
 
@@ -52,7 +50,7 @@ export async function runServerCli({ manifestProvider, appLabel = 'Brainana', ca
   // regardless of which entry point started the server (overridable via --cache-dir / env).
   const cacheRoot = arg('--cache-dir', process.env.BRAINANA_CACHE_DIR) || cacheDir(cacheApp)
 
-  const { server, address } = await startServer({ token, distRoot: resolvedDist, initialSources, legacyCompat, port, cacheRoot, manifestProvider })
+  const { server, address } = await startServer({ token, distRoot: resolvedDist, initialSources, port, cacheRoot, manifestProvider })
 
   console.log(`${appLabel} ${versionInfo.version} (${versionInfo.buildId})`)
   console.log(`Listening on http://127.0.0.1:${address.port}${token ? ' (token required)' : ' (UNAUTHENTICATED — --no-token)'}`)
@@ -60,7 +58,7 @@ export async function runServerCli({ manifestProvider, appLabel = 'Brainana', ca
   // index.html, but a caller driving the API directly needs it on stdout to use it at all.
   if (token && !arg('--token', null)) console.log(`Session token: ${token}`)
   if (outputDir) console.log(`Startup local source: ${path.resolve(outputDir)}`)
-  if (resolvedDist) console.log(`Serving static assets from ${resolvedDist}${legacyCompat ? ' (legacy-compat route enabled)' : ''}`)
+  if (resolvedDist) console.log(`Serving static assets from ${resolvedDist}`)
   if (!outputDir) console.log('No startup source — add sources in-app via POST /api/sources')
 
   const shutdown = () => server.close(() => process.exit(0))

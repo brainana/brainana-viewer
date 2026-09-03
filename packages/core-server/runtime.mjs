@@ -9,8 +9,6 @@
 //     serve time, so it never appears in a URL or history.
 //   - Source-scoped data routes: /brainana-data/<sourceId>/<encoded rel>, so subjects from
 //     multiple sources coexist without path collisions.
-//   - Optional legacy-compat: an unscoped, token-exempt data route + a single implicit
-//     source, so the reference dist/ bundle keeps working during the transition (§6.4).
 import http from 'node:http'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -31,10 +29,9 @@ function exists(p) {
   }
 }
 
-// Data-route matchers, built from the single SOURCE_ID_PATTERN so they can't drift from the
-// registry's id generator (#nextId): one captures the source id, one just tests for a scoped path.
+// Data-route matcher, built from the single SOURCE_ID_PATTERN so it can't drift from the
+// registry's id generator (#nextId).
 const SCOPED_DATA_RE = new RegExp(`^/brainana-data/(${SOURCE_ID_PATTERN})/(.*)$`)
-const SCOPED_DATA_PREFIX_RE = new RegExp(`^/brainana-data/${SOURCE_ID_PATTERN}/`)
 
 // List subdirectories of an absolute path for the folder picker. Defaults to the server
 // user's home directory when no path (or a non-absolute one) is given. Directories only,
@@ -154,12 +151,10 @@ function staticContentType(absPath) {
 }
 
 // Create (but do not start) the HTTP server.
-//   token        — per-launch session token; null/'' disables the guard (legacy loopback).
+//   token        — per-launch session token; null/'' disables the guard (explicit --no-token only).
 //   distRoot     — directory of built static assets to serve (optional).
 //   initialSources — [{ type:'local', path, label? }] opened at startup (optional).
-//   legacyCompat — when true, also expose an unscoped /brainana-data/<rel> route bound to
-//                  the first source, token-exempt, for the old dist/ bundle.
-export function createServer({ token = null, distRoot = null, initialSources = [], legacyCompat = false, cacheRoot = null, manifestProvider = null } = {}) {
+export function createServer({ token = null, distRoot = null, initialSources = [], cacheRoot = null, manifestProvider = null } = {}) {
   const registry = new SourceRegistry()
   const guard = createTokenGuard(token)
   // Base cache dir for remote sources when the client does not specify one. Neutral name —
@@ -226,11 +221,6 @@ export function createServer({ token = null, distRoot = null, initialSources = [
       return source
     }
     throw new Error(`Unknown source type: ${spec.type}`)
-  }
-
-  // The single implicit source used by legacy-compat unscoped routes.
-  function legacySource() {
-    return registry.list()[0] ? registry.get(registry.list()[0].id) : null
   }
 
   function serveStatic(res, pathname) {
@@ -317,8 +307,7 @@ export function createServer({ token = null, distRoot = null, initialSources = [
 
       // ---- Everything else under /api or /brainana-data requires the token ----
       const guarded = pathname.startsWith('/api/') || pathname.startsWith('/brainana-data/')
-      const isLegacyData = legacyCompat && pathname.startsWith('/brainana-data/') && !SCOPED_DATA_PREFIX_RE.test(pathname)
-      if (guarded && !isLegacyData && !guard(req)) {
+      if (guarded && !guard(req)) {
         return sendJson(res, 401, { error: 'Missing or invalid session token' })
       }
 
@@ -481,14 +470,6 @@ export function createServer({ token = null, distRoot = null, initialSources = [
         const source = registry.get(decodeURIComponent(dataScoped[1]))
         if (!source) return sendJson(res, 404, { error: 'Source not found' })
         const rel = dataScoped[2].split('/').map(decodeURIComponent).join('/')
-        return serveData(req, res, source, rel)
-      }
-
-      // ---- Legacy-compat unscoped data bytes → first source ----
-      if (isLegacyData) {
-        const source = legacySource()
-        if (!source) return sendJson(res, 400, { error: 'No data source configured' })
-        const rel = pathname.slice('/brainana-data/'.length).split('/').map(decodeURIComponent).join('/')
         return serveData(req, res, source, rel)
       }
 
