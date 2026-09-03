@@ -137,6 +137,23 @@ export function createColormapPicker(opts: ColormapPickerOptions): ColormapPicke
   trigger.addEventListener('click', () => (open ? close() : openPop()))
   paintTrigger()
 
+  // openPop() registers four listeners on document/window, and only close() removes them. Those
+  // outlive the element, because document and window do — so a picker discarded while its popup is
+  // open (a panel rebuilt via innerHTML = '', which is how this UI re-renders) leaks all four, and
+  // each of them closes over the detached trigger and popup, holding that DOM alive too.
+  //
+  // Watching for the element leaving the DOM ties the listeners' lifetime to the component's
+  // instead of to the user remembering to click elsewhere first. Guarded because MutationObserver
+  // is absent in a non-DOM context (the module is imported by unit tests).
+  if (typeof MutationObserver === 'function' && typeof document !== 'undefined') {
+    const detachWatcher = new MutationObserver(() => {
+      if (element.isConnected) return
+      close() // removes the document/window listeners
+      detachWatcher.disconnect()
+    })
+    detachWatcher.observe(document.body, { childList: true, subtree: true })
+  }
+
   return {
     element,
     value: () => current,

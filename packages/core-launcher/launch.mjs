@@ -71,12 +71,12 @@ function openBrowser(url) {
 // NOT open a browser or install signal handlers — those are the caller's concern. This is the
 // shared core reused by both the browser launcher (`launch()`, below) and the desktop shell
 // (`@brainana/core-desktop`), which loads the same URL in an Electron BrowserWindow instead.
-export async function bootServer({ manifestProvider, appLabel = 'Brainana', distRoot = null, cacheApp = 'Brainana', preferredPort = 5173, legacyCompat = false }) {
+export async function bootServer({ manifestProvider, appLabel = 'Brainana', distRoot = null, cacheApp = 'Brainana', preferredPort = 5173 }) {
   const token = generateSessionToken()
   const cache = cacheDir(cacheApp)
   fs.mkdirSync(cache, { recursive: true })
 
-  const { server, address } = await startOnFreePort({ token, distRoot, legacyCompat, cacheRoot: cache, manifestProvider }, Number(process.env.PORT) || preferredPort)
+  const { server, address } = await startOnFreePort({ token, distRoot, cacheRoot: cache, manifestProvider }, Number(process.env.PORT) || preferredPort)
   const url = `http://127.0.0.1:${address.port}/`
   console.log(`${appLabel} ${versionInfo.version} (${versionInfo.buildId})`)
   console.log(`Serving on ${url} (loopback only, session token active)`)
@@ -88,10 +88,7 @@ export async function bootServer({ manifestProvider, appLabel = 'Brainana', dist
 // Boot a brainana tool: mint a token, find a free loopback port, start the core server with the
 // app's injected manifest provider, and open the browser. The app supplies its own identity.
 export async function launch({ manifestProvider, appLabel = 'Brainana', distRoot = null, cacheApp = 'Brainana', preferredPort = 5173 }) {
-  // The built dist/ IS the source-scoped, token-guarded frontend — it does NOT use the
-  // unscoped, token-exempt legacy route. So legacy-compat is an explicit opt-in (--legacy),
-  // never implied by the mere presence of a build.
-  const boot = await bootServer({ manifestProvider, appLabel, distRoot, cacheApp, preferredPort, legacyCompat: hasFlag('--legacy') })
+  const boot = await bootServer({ manifestProvider, appLabel, distRoot, cacheApp, preferredPort })
   const { server, address, url } = boot
 
   if (!hasFlag('--no-open') && !hasFlag('--dev')) openBrowser(url)

@@ -9,8 +9,6 @@
 //     serve time, so it never appears in a URL or history.
 //   - Source-scoped data routes: /brainana-data/<sourceId>/<encoded rel>, so subjects from
 //     multiple sources coexist without path collisions.
-//   - Optional legacy-compat: an unscoped, token-exempt data route + a single implicit
-//     source, so the reference dist/ bundle keeps working during the transition (§6.4).
 import http from 'node:http'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -20,6 +18,7 @@ import { SourceRegistry, SOURCE_ID_PATTERN, summarizeSource } from './dataSource
 import { LocalDataSource } from './localSource.mjs'
 import { SftpDataSource } from './sftpSource.mjs'
 import { SftpClient } from './sftpClient.mjs'
+import { cacheUsage, reclaimCachedFiles } from './cache.mjs'
 import { createTokenGuard, isWithin, isLoopbackHost, TOKEN_COOKIE } from './security.mjs'
 import { versionInfo } from './version.mjs'
 
@@ -31,10 +30,9 @@ function exists(p) {
   }
 }
 
-// Data-route matchers, built from the single SOURCE_ID_PATTERN so they can't drift from the
-// registry's id generator (#nextId): one captures the source id, one just tests for a scoped path.
+// Data-route matcher, built from the single SOURCE_ID_PATTERN so it can't drift from the
+// registry's id generator (#nextId).
 const SCOPED_DATA_RE = new RegExp(`^/brainana-data/(${SOURCE_ID_PATTERN})/(.*)$`)
-const SCOPED_DATA_PREFIX_RE = new RegExp(`^/brainana-data/${SOURCE_ID_PATTERN}/`)
 
 // List subdirectories of an absolute path for the folder picker. Defaults to the server
 // user's home directory when no path (or a non-absolute one) is given. Directories only,
@@ -133,9 +131,40 @@ function sendJson(res, status, value) {
   res.end(JSON.stringify(value))
 }
 
+// Every JSON body this server accepts is a small control message — a source spec, a path, a label.
+// Buffering without a bound meant a single request could hold arbitrary memory; the cap turns that
+// into a 413 at a size no legitimate caller approaches.
+const MAX_JSON_BODY_BYTES = 1024 * 1024
+
+// Past the cap the body is DRAINED rather than aborted: buffering stops (so memory stays bounded
+// at the cap) but reading continues, so the client finishes sending and actually receives the 413.
+// Destroying the request mid-upload instead resets the connection, and the caller sees ECONNRESET
+// rather than the reason it was refused.
+//
+// A client that streams without end is still cut off, at a much higher ceiling — at that point it
+// is not a legitimate request being told no, and a reset is the correct answer.
+const MAX_JSON_DRAIN_BYTES = 32 * 1024 * 1024
+
 async function jsonBody(req) {
   const chunks = []
-  for await (const chunk of req) chunks.push(chunk)
+  let total = 0
+  let tooLarge = false
+  for await (const chunk of req) {
+    total += chunk.length
+    if (total > MAX_JSON_BODY_BYTES) {
+      if (!tooLarge) chunks.length = 0 // release what was buffered; keep draining
+      tooLarge = true
+      if (total > MAX_JSON_DRAIN_BYTES) {
+        req.destroy()
+        break
+      }
+      continue
+    }
+    chunks.push(chunk)
+  }
+  if (tooLarge) {
+    throw Object.assign(new Error(`Request body too large (limit ${MAX_JSON_BODY_BYTES} bytes)`), { statusCode: 413 })
+  }
   return JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')
 }
 
@@ -154,12 +183,10 @@ function staticContentType(absPath) {
 }
 
 // Create (but do not start) the HTTP server.
-//   token        — per-launch session token; null/'' disables the guard (legacy loopback).
+//   token        — per-launch session token; null/'' disables the guard (explicit --no-token only).
 //   distRoot     — directory of built static assets to serve (optional).
 //   initialSources — [{ type:'local', path, label? }] opened at startup (optional).
-//   legacyCompat — when true, also expose an unscoped /brainana-data/<rel> route bound to
-//                  the first source, token-exempt, for the old dist/ bundle.
-export function createServer({ token = null, distRoot = null, initialSources = [], legacyCompat = false, cacheRoot = null, manifestProvider = null } = {}) {
+export function createServer({ token = null, distRoot = null, initialSources = [], cacheRoot = null, manifestProvider = null } = {}) {
   const registry = new SourceRegistry()
   const guard = createTokenGuard(token)
   // Base cache dir for remote sources when the client does not specify one. Neutral name —
@@ -171,6 +198,16 @@ export function createServer({ token = null, distRoot = null, initialSources = [
   // token -> { client, lastUsed }. Cleaned up on disconnect, on idle timeout, and on server close.
   // These are the viewer server's own sockets — unrelated to any pipeline process/scratch cleanup.
   const remoteBrowsers = new Map()
+  // Header, never a query parameter. A browse token authorises directory listing over a live,
+  // authenticated SSH connection, so it is the same class of secret as the session token — and
+  // security.mjs already spells out why those must not ride in a URL: server logs, the Referer
+  // header, browser history. Declared here and mirrored in core-client's filesystemClient.ts;
+  // core-client is browser code and cannot import a server module to share the constant.
+  const REMOTE_TOKEN_HEADER = 'x-brainana-remote-token'
+  const remoteBrowseToken = (req) => {
+    const value = req.headers[REMOTE_TOKEN_HEADER]
+    return typeof value === 'string' && value ? value.trim() : ''
+  }
   const REMOTE_BROWSE_TTL_MS = 10 * 60 * 1000
   const sweepRemoteBrowsers = () => {
     const now = Date.now()
@@ -226,11 +263,6 @@ export function createServer({ token = null, distRoot = null, initialSources = [
       return source
     }
     throw new Error(`Unknown source type: ${spec.type}`)
-  }
-
-  // The single implicit source used by legacy-compat unscoped routes.
-  function legacySource() {
-    return registry.list()[0] ? registry.get(registry.list()[0].id) : null
   }
 
   function serveStatic(res, pathname) {
@@ -317,8 +349,7 @@ export function createServer({ token = null, distRoot = null, initialSources = [
 
       // ---- Everything else under /api or /brainana-data requires the token ----
       const guarded = pathname.startsWith('/api/') || pathname.startsWith('/brainana-data/')
-      const isLegacyData = legacyCompat && pathname.startsWith('/brainana-data/') && !SCOPED_DATA_PREFIX_RE.test(pathname)
-      if (guarded && !isLegacyData && !guard(req)) {
+      if (guarded && !guard(req)) {
         return sendJson(res, 401, { error: 'Missing or invalid session token' })
       }
 
@@ -375,7 +406,7 @@ export function createServer({ token = null, distRoot = null, initialSources = [
       }
       if (pathname === '/api/remote/browse' && req.method === 'GET') {
         sweepRemoteBrowsers()
-        const entry = remoteBrowsers.get(url.searchParams.get('token') || '')
+        const entry = remoteBrowsers.get(remoteBrowseToken(req))
         if (!entry) return sendJson(res, 404, { error: 'Not connected (session expired). Reconnect and try again.' })
         entry.lastUsed = Date.now()
         try {
@@ -387,13 +418,27 @@ export function createServer({ token = null, distRoot = null, initialSources = [
         }
       }
       if (pathname === '/api/remote/disconnect' && req.method === 'POST') {
-        const { token } = await jsonBody(req).catch(() => ({}))
-        const entry = token && remoteBrowsers.get(token)
+        const browseToken = remoteBrowseToken(req)
+        const entry = browseToken && remoteBrowsers.get(browseToken)
         if (entry) {
-          remoteBrowsers.delete(token)
+          remoteBrowsers.delete(browseToken)
           entry.client.close().catch(() => {})
         }
         return sendJson(res, 200, { ok: true })
+      }
+
+      // ---- Cache administration ----
+      // The cache holds whole volumes and never evicts (audit M6). No LRU policy yet; this is the
+      // escape hatch: see the size, reclaim the fetched bytes. Reclaiming keeps every mirror, so an
+      // open source keeps working and simply re-fetches on the next read.
+      if (pathname === '/api/cache' && req.method === 'GET') {
+        return sendJson(res, 200, await cacheUsage(serverCacheRoot))
+      }
+      if (pathname === '/api/cache' && req.method === 'DELETE') {
+        // Both shapes carry a `bytes` field, so name the freed figure explicitly rather than
+        // spreading them together and letting the usage total silently win.
+        const { bytes: freedBytes } = await reclaimCachedFiles(serverCacheRoot)
+        return sendJson(res, 200, { freedBytes, ...(await cacheUsage(serverCacheRoot)) })
       }
 
       // ---- Source registry ----
@@ -441,7 +486,10 @@ export function createServer({ token = null, distRoot = null, initialSources = [
           return sendJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
         }
       }
-      if (pathname.startsWith('/api/sources/') && req.method === 'DELETE') {
+      // Bare `/api/sources/:id` only — the `!includes('/')` test mirrors the PATCH route above.
+      // Without it this matched every scoped action path too (`/api/sources/:id/monkeys`), which
+      // then 404'd as a bogus source id instead of reporting the real problem: wrong method.
+      if (pathname.startsWith('/api/sources/') && !pathname.slice('/api/sources/'.length).includes('/') && req.method === 'DELETE') {
         const id = decodeURIComponent(pathname.slice('/api/sources/'.length))
         const removed = await registry.remove(id)
         return sendJson(res, removed ? 200 : 404, removed ? { id } : { error: 'Source not found' })
@@ -453,6 +501,13 @@ export function createServer({ token = null, distRoot = null, initialSources = [
         const [, id, action, tail] = scoped
         const source = registry.get(decodeURIComponent(id))
         if (!source) return sendJson(res, 404, { error: 'Source not found' })
+        // The read actions previously ignored the method entirely, so `DELETE .../monkeys`
+        // cheerfully performed the read. Only the two write actions below declare a method, so
+        // gate the reads on GET here rather than repeating the check five times.
+        const READ_ACTIONS = new Set(['monkeys', 'manifest', 'directories', 'import-files', 'save-list'])
+        if (READ_ACTIONS.has(action) && req.method !== 'GET') {
+          return sendJson(res, 405, { error: 'Method not allowed' })
+        }
         try {
           if (action === 'monkeys') return sendJson(res, 200, await source.listMonkeys())
           if (action === 'manifest') return sendJson(res, 200, await source.buildManifest(decodeURIComponent(tail || '')))
@@ -481,14 +536,6 @@ export function createServer({ token = null, distRoot = null, initialSources = [
         const source = registry.get(decodeURIComponent(dataScoped[1]))
         if (!source) return sendJson(res, 404, { error: 'Source not found' })
         const rel = dataScoped[2].split('/').map(decodeURIComponent).join('/')
-        return serveData(req, res, source, rel)
-      }
-
-      // ---- Legacy-compat unscoped data bytes → first source ----
-      if (isLegacyData) {
-        const source = legacySource()
-        if (!source) return sendJson(res, 400, { error: 'No data source configured' })
-        const rel = pathname.slice('/brainana-data/'.length).split('/').map(decodeURIComponent).join('/')
         return serveData(req, res, source, rel)
       }
 

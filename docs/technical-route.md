@@ -179,9 +179,11 @@ A `DataSource` is the uniform interface the runtime talks to: `listMonkeys`, `bu
   or the cookie — **never from a `?token=` query param**, which would leak it into URLs, history,
   and logs. Comparison is timing-safe (both sides hashed to a fixed width first, so a length
   mismatch is safely false, never a throw).
-- **Legacy-compat is explicit opt-in.** The built `dist/` IS the source-scoped, token-guarded SPA;
-  it never uses the unscoped route. The token-exempt unscoped `/brainana-data/<rel>` route exists
-  only when `--legacy` is passed, never merely because a build is present.
+- **Every data route is guarded.** Data is reachable only at the source-scoped
+  `/brainana-data/<sourceId>/<rel>`, which requires the session token like every other route. An
+  unscoped, token-exempt `/brainana-data/<rel>` route once existed behind a `--legacy` flag, for a
+  `dist/` bundle that no longer exists; nothing in this repo ever generated an unscoped URL, so it
+  was removed rather than documented further. There is no auth-exempt path.
 - **Path containment** (`isWithin`, `cleanRelative`, `resolveWithin`) guards every filesystem and
   remote path; traversal (`..`), absolute breakouts, and NUL are rejected.
 - **Server-side export** (`/api/sources/:id/save-*`) writes into the source with containment +

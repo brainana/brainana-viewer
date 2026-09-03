@@ -5,7 +5,7 @@ import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { contentTypeFor, parseRange } from './dataSource.mjs'
-import { isWithin, cleanRelative, resolveWithin } from './security.mjs'
+import { isWithin, isWithinReal, isWritableWithinReal, cleanRelative, resolveWithin } from './security.mjs'
 import { writeStreamAtomic } from './export.mjs'
 
 function exists(p) {
@@ -19,6 +19,9 @@ function exists(p) {
 export class LocalDataSource {
   type = 'local'
 
+  // Canonical form of `root`, used only for containment checks. See the constructor.
+  #realRoot
+
   constructor({ id, root, label, customLabel, manifest } = {}) {
     if (!root) throw new Error('LocalDataSource requires a root path')
     // The domain manifest provider ({ isSubjectDir, buildManifest, ... }) is injected so core
@@ -28,8 +31,20 @@ export class LocalDataSource {
     if (!exists(resolved) || !fs.statSync(resolved).isDirectory()) {
       throw new Error(`Not a directory: ${resolved}`)
     }
+    // `root` and `#realRoot` are deliberately two different things, because they answer two
+    // different questions.
+    //
+    //   root      — the path the CALLER gave. It is user-facing: summarizeSource returns it, the
+    //               sources dialog shows it, the report prints it. It must stay what was chosen.
+    //   #realRoot — the same directory with symlinks resolved. Containment compares canonical
+    //               against canonical, which is the whole point of isWithinReal.
+    //
+    // Collapsing them broke macOS, where /var is a symlink to /private/var: a source opened at
+    // /var/folders/... reported itself as /private/var/folders/... . Resolved ONCE here, so each
+    // request pays a single extra syscall rather than one per byte range.
     this.id = id
     this.root = resolved
+    this.#realRoot = fs.realpathSync(resolved)
     this.label = label || path.basename(resolved) || resolved
     // User-editable display name, overriding `label` in pickers when set. Null = fall back to
     // `label`. Held in RAM only (see PATCH /api/sources/:id); lost on server restart.
@@ -66,7 +81,7 @@ export class LocalDataSource {
 
   async listDirectories(rel = '') {
     const current = path.resolve(this.root, rel || '.')
-    if (!isWithin(this.root, current) || !exists(current) || !fs.statSync(current).isDirectory()) {
+    if (!isWithin(this.root, current) || !isWithinReal(this.#realRoot, current) || !exists(current) || !fs.statSync(current).isDirectory()) {
       throw new Error('Directory not found inside the configured root')
     }
     const relative = path.relative(this.root, current)
@@ -90,7 +105,7 @@ export class LocalDataSource {
 
   async listImportFiles(rel = '', query = '') {
     const current = path.resolve(this.root, rel || '.')
-    if (!isWithin(this.root, current) || !exists(current) || !fs.statSync(current).isDirectory()) throw new Error('Directory not found inside the configured root')
+    if (!isWithin(this.root, current) || !isWithinReal(this.#realRoot, current) || !exists(current) || !fs.statSync(current).isDirectory()) throw new Error('Directory not found inside the configured root')
     const relative = path.relative(this.root, current)
     const parent = relative ? path.dirname(relative) : null
     const needle = String(query || '').trim().toLowerCase()
@@ -111,7 +126,11 @@ export class LocalDataSource {
   #resolveFile(rel) {
     const clean = cleanRelative(rel)
     const abs = path.resolve(this.root, ...clean.split('/').filter(Boolean))
-    if (!isWithin(this.root, abs)) throw Object.assign(new Error('File not found'), { statusCode: 404 })
+    // Lexical check first (cheap, rejects the obvious), then the real-path check that a symlink
+    // cannot lie its way past.
+    if (!isWithin(this.root, abs) || !isWithinReal(this.#realRoot, abs)) {
+      throw Object.assign(new Error('File not found'), { statusCode: 404 })
+    }
     return abs
   }
 
@@ -137,8 +156,18 @@ export class LocalDataSource {
 
   // ---- server-side export ----
 
+  // resolveWithin is lexical, so it stops `..` but not a symlinked directory pointing out of the
+  // root. For a WRITE that matters more than for a read: it would create files outside the root
+  // rather than merely serve them.
+  #assertWritable(resolved) {
+    if (!isWritableWithinReal(this.#realRoot, resolved)) {
+      throw Object.assign(new Error('Path is outside the configured root'), { statusCode: 400 })
+    }
+  }
+
   async saveList(rel = '') {
     const { clean, resolved } = resolveWithin(this.root, rel)
+    this.#assertWritable(resolved)
     if (!exists(resolved) || !fs.statSync(resolved).isDirectory()) throw new Error('Folder not found')
     const entries = fs
       .readdirSync(resolved, { withFileTypes: true })
@@ -151,6 +180,7 @@ export class LocalDataSource {
   async mkdir(rel) {
     const { clean, resolved } = resolveWithin(this.root, rel)
     if (!clean) throw new Error('A folder name is required')
+    this.#assertWritable(resolved)
     await fsp.mkdir(resolved, { recursive: false })
     return { path: clean }
   }
@@ -158,6 +188,7 @@ export class LocalDataSource {
   async saveFile(rel, readable, { overwrite = false } = {}) {
     const { clean, resolved } = resolveWithin(this.root, rel)
     if (!clean) throw new Error('A filename is required')
+    this.#assertWritable(resolved)
     const result = await writeStreamAtomic(readable, resolved, overwrite)
     if (result.exists) return { exists: true, path: clean }
     return { exists: false, path: clean, bytes: result.bytes }

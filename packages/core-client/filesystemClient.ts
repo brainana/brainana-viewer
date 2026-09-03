@@ -51,6 +51,15 @@ export interface BrowseListing {
   entries: BrowseEntry[]
 }
 
+export interface CacheUsage {
+  /** Absolute path of the cache root on the server machine. */
+  path: string
+  /** Everything under it, including the mirrors. */
+  bytes: number
+  /** Just the fetched file bytes — what `reclaimCache()` would free. */
+  reclaimableBytes: number
+}
+
 // A host parsed from the server user's ~/.ssh/config, offered as a recall option in the remote
 // connect form. `host` is the alias; `hostName` is the real address when the config specifies one.
 export interface SshHost {
@@ -62,6 +71,13 @@ export interface SshHost {
 
 // The manifest shape is broad and consumed structurally by the viewer; keep it open here.
 export type Manifest = Record<string, unknown> & { id: string; label: string; session: string | null }
+
+// Transport for the remote-browse token: a header, never a query parameter. That token authorises
+// directory listing over a live authenticated SSH connection, so it is the same class of secret as
+// the session token, and runtimeClient.ts/security.mjs already state why those must stay out of
+// URLs (server logs, Referer, browser history). Mirrored in core-server's runtime.mjs — this is
+// browser code and cannot import a server module to share the constant.
+const REMOTE_TOKEN_HEADER = 'X-Brainana-Remote-Token'
 
 export class FilesystemClient {
   #client: RuntimeClient
@@ -92,6 +108,18 @@ export class FilesystemClient {
     return this.#client.apiJson(`/api/fs/browse?path=${encodeURIComponent(abs)}`)
   }
 
+  // Size of the remote-file cache. It has no eviction policy, so this is how a user finds out it
+  // has grown (audit M6).
+  cacheUsage(): Promise<CacheUsage> {
+    return this.#client.apiJson('/api/cache')
+  }
+
+  // Free the fetched file bytes, keeping every mirror. Open sources keep working and re-fetch on
+  // their next read, so this costs time rather than correctness.
+  reclaimCache(): Promise<CacheUsage & { freedBytes: number }> {
+    return this.#client.apiJson('/api/cache', { method: 'DELETE' })
+  }
+
   // Known hosts from the server user's ~/.ssh/config, to seed the remote-connect recall dropdown.
   // Best-effort: the server returns [] when there is no config.
   sshHosts(): Promise<SshHost[]> {
@@ -111,15 +139,16 @@ export class FilesystemClient {
   // List directories under an absolute remote path on an open connection. Empty `abs` starts at the
   // remote home directory (server-resolved). Same shape as browseFs so the picker is shared.
   browseRemote(token: string, abs = ''): Promise<BrowseListing> {
-    return this.#client.apiJson(`/api/remote/browse?token=${encodeURIComponent(token)}&path=${encodeURIComponent(abs)}`)
+    return this.#client.apiJson(`/api/remote/browse?path=${encodeURIComponent(abs)}`, {
+      headers: { [REMOTE_TOKEN_HEADER]: token },
+    })
   }
 
   // Close a pre-add remote browse session (best-effort; frees the server-side SFTP socket).
   disconnectRemote(token: string): Promise<{ ok: boolean }> {
     return this.#client.apiJson('/api/remote/disconnect', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token }),
+      headers: { [REMOTE_TOKEN_HEADER]: token },
     })
   }
 }

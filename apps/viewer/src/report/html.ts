@@ -517,6 +517,14 @@ export function buildReportHtml(data: ReportData): string {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Defence in depth. This document already carries no script and references nothing over the
+     network, so today the policy forbids only what is already absent. The point is tomorrow: a
+     report is the artifact meant to outlive the viewer, opened years later on a machine with no
+     brainana installed, by someone with no idea what is inside it. default-src 'none' means that
+     whatever it ends up containing, it cannot reach the network or execute. The two exceptions are
+     exactly what the document needs: its screenshots are embedded data: URLs, and its stylesheet is
+     inline. Note there is no script-src exception — inline script stays forbidden. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
 <title>${esc(title)}</title>
 <style>${STYLES}</style>
 </head>

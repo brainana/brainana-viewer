@@ -1,6 +1,7 @@
 // Tool-agnostic security primitives: per-launch session token and path containment.
 // No Viewer-domain knowledge lives here so core/ can be lifted into a shared package later.
 import crypto from 'node:crypto'
+import fs from 'node:fs'
 import path from 'node:path'
 
 // ---------------------------------------------------------------------------
@@ -118,6 +119,53 @@ export function cleanRelative(raw = '') {
     throw new Error('Invalid path')
   }
   return parts.join('/')
+}
+
+// Containment that survives symlinks.
+//
+// isWithin() above compares LEXICALLY — it never touches the filesystem — so a symlink inside the
+// root pointing out of it passes, and whatever follows (readdir, createReadStream) then dutifully
+// follows the link. cleanRelative already blocks `..` in client input, which makes a symlink the
+// remaining way out.
+//
+// Both sides are resolved to their real paths before comparing. `root` should be pre-resolved once
+// by the caller (a data root does not move) so this costs ONE extra syscall per request, not one
+// per byte range. A path that cannot be resolved — missing file, broken link, EACCES — is treated
+// as outside: the caller reports "not found", which is also what it should say about a file it is
+// not allowed to reach.
+export function isWithinReal(resolvedRoot, candidate) {
+  let realCandidate
+  try {
+    realCandidate = fs.realpathSync(candidate)
+  } catch {
+    return false
+  }
+  return isWithin(resolvedRoot, realCandidate)
+}
+
+// Containment for a path that does not exist YET — the destination of a write.
+//
+// isWithinReal cannot help here: realpath fails on a missing file, so it would refuse every new
+// file. What CAN be resolved is the nearest existing ancestor, and that is enough: a symlink can
+// only redirect through a directory that already exists. Walk up to the first ancestor that
+// resolves, canonicalise it, and require it to be inside the root — then the not-yet-created tail
+// is inside it too.
+export function isWritableWithinReal(resolvedRoot, candidate) {
+  let current = path.resolve(candidate)
+  for (;;) {
+    let real
+    try {
+      real = fs.realpathSync(current)
+    } catch {
+      const parent = path.dirname(current)
+      // Reached the filesystem root without finding anything that exists: nothing to trust.
+      if (parent === current) return false
+      current = parent
+      continue
+    }
+    // The tail below `current` does not exist yet, so containment of `current` decides it.
+    return isWithin(resolvedRoot, real)
+  }
 }
 
 // Resolve a clean relative path against an absolute root, asserting containment.
