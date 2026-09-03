@@ -5,7 +5,7 @@ import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { contentTypeFor, parseRange } from './dataSource.mjs'
-import { isWithin, cleanRelative, resolveWithin } from './security.mjs'
+import { isWithin, isWithinReal, cleanRelative, resolveWithin } from './security.mjs'
 import { writeStreamAtomic } from './export.mjs'
 
 function exists(p) {
@@ -28,8 +28,13 @@ export class LocalDataSource {
     if (!exists(resolved) || !fs.statSync(resolved).isDirectory()) {
       throw new Error(`Not a directory: ${resolved}`)
     }
+    // Resolved to its REAL path once here, so every per-request containment check below can
+    // compare real path against real path with a single extra syscall. If the root itself is
+    // reached through a symlink (a very common way datasets are mounted), comparing a resolved
+    // candidate against an unresolved root would reject everything.
+    const realRoot = fs.realpathSync(resolved)
     this.id = id
-    this.root = resolved
+    this.root = realRoot
     this.label = label || path.basename(resolved) || resolved
     // User-editable display name, overriding `label` in pickers when set. Null = fall back to
     // `label`. Held in RAM only (see PATCH /api/sources/:id); lost on server restart.
@@ -66,7 +71,7 @@ export class LocalDataSource {
 
   async listDirectories(rel = '') {
     const current = path.resolve(this.root, rel || '.')
-    if (!isWithin(this.root, current) || !exists(current) || !fs.statSync(current).isDirectory()) {
+    if (!isWithin(this.root, current) || !isWithinReal(this.root, current) || !exists(current) || !fs.statSync(current).isDirectory()) {
       throw new Error('Directory not found inside the configured root')
     }
     const relative = path.relative(this.root, current)
@@ -90,7 +95,7 @@ export class LocalDataSource {
 
   async listImportFiles(rel = '', query = '') {
     const current = path.resolve(this.root, rel || '.')
-    if (!isWithin(this.root, current) || !exists(current) || !fs.statSync(current).isDirectory()) throw new Error('Directory not found inside the configured root')
+    if (!isWithin(this.root, current) || !isWithinReal(this.root, current) || !exists(current) || !fs.statSync(current).isDirectory()) throw new Error('Directory not found inside the configured root')
     const relative = path.relative(this.root, current)
     const parent = relative ? path.dirname(relative) : null
     const needle = String(query || '').trim().toLowerCase()
@@ -111,7 +116,11 @@ export class LocalDataSource {
   #resolveFile(rel) {
     const clean = cleanRelative(rel)
     const abs = path.resolve(this.root, ...clean.split('/').filter(Boolean))
-    if (!isWithin(this.root, abs)) throw Object.assign(new Error('File not found'), { statusCode: 404 })
+    // Lexical check first (cheap, rejects the obvious), then the real-path check that a symlink
+    // cannot lie its way past.
+    if (!isWithin(this.root, abs) || !isWithinReal(this.root, abs)) {
+      throw Object.assign(new Error('File not found'), { statusCode: 404 })
+    }
     return abs
   }
 

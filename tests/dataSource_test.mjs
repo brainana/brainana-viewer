@@ -65,3 +65,15 @@ async function registryChecks() {
 await registryChecks()
 
 console.log(`dataSource_test: ${passed} checks passed`)
+
+// --- L6: the Range header must be parsed anchored -------------------------------------------
+// The pattern was /bytes=(\d*)-(\d*)/ with no anchor, so any header merely CONTAINING "bytes="
+// parsed as a valid range. A malformed header should be ignored (null => serve the whole file),
+// not half-understood.
+for (const junk of ['xbytes=0-1', 'items=0-1', 'foo bytes=0-1', 'BYTES=0-1']) {
+  assert.equal(parseRange(junk, 100), null, `${junk} is not a range header`)
+}
+assert.deepEqual(parseRange('bytes=0-1', 100), { start: 0, end: 1 }, 'a real range still parses')
+assert.deepEqual(parseRange('  bytes=0-1  ', 100), { start: 0, end: 1 }, 'surrounding whitespace is tolerated')
+ok('parseRange only accepts a properly formed bytes= header')
+

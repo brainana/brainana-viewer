@@ -34,7 +34,10 @@ export function contentTypeFor(name) {
 //   bytes=-500  -> last 500 bytes                    (suffix; empty start)
 export function parseRange(rangeHeader, totalSize) {
   if (!rangeHeader) return null
-  const m = /bytes=(\d*)-(\d*)/.exec(rangeHeader)
+  // Anchored: unanchored, any header merely CONTAINING "bytes=" ("xbytes=0-1") parsed as a valid
+  // range. A header we do not fully understand must be ignored — serving the whole file — rather
+  // than half-understood.
+  const m = /^\s*bytes=(\d*)-(\d*)\s*$/.exec(String(rangeHeader))
   if (!m) return null
   const hasStart = m[1] !== ''
   const hasEnd = m[2] !== ''

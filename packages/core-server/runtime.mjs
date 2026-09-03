@@ -130,9 +130,40 @@ function sendJson(res, status, value) {
   res.end(JSON.stringify(value))
 }
 
+// Every JSON body this server accepts is a small control message — a source spec, a path, a label.
+// Buffering without a bound meant a single request could hold arbitrary memory; the cap turns that
+// into a 413 at a size no legitimate caller approaches.
+const MAX_JSON_BODY_BYTES = 1024 * 1024
+
+// Past the cap the body is DRAINED rather than aborted: buffering stops (so memory stays bounded
+// at the cap) but reading continues, so the client finishes sending and actually receives the 413.
+// Destroying the request mid-upload instead resets the connection, and the caller sees ECONNRESET
+// rather than the reason it was refused.
+//
+// A client that streams without end is still cut off, at a much higher ceiling — at that point it
+// is not a legitimate request being told no, and a reset is the correct answer.
+const MAX_JSON_DRAIN_BYTES = 32 * 1024 * 1024
+
 async function jsonBody(req) {
   const chunks = []
-  for await (const chunk of req) chunks.push(chunk)
+  let total = 0
+  let tooLarge = false
+  for await (const chunk of req) {
+    total += chunk.length
+    if (total > MAX_JSON_BODY_BYTES) {
+      if (!tooLarge) chunks.length = 0 // release what was buffered; keep draining
+      tooLarge = true
+      if (total > MAX_JSON_DRAIN_BYTES) {
+        req.destroy()
+        break
+      }
+      continue
+    }
+    chunks.push(chunk)
+  }
+  if (tooLarge) {
+    throw Object.assign(new Error(`Request body too large (limit ${MAX_JSON_BODY_BYTES} bytes)`), { statusCode: 413 })
+  }
   return JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')
 }
 
@@ -430,7 +461,10 @@ export function createServer({ token = null, distRoot = null, initialSources = [
           return sendJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
         }
       }
-      if (pathname.startsWith('/api/sources/') && req.method === 'DELETE') {
+      // Bare `/api/sources/:id` only — the `!includes('/')` test mirrors the PATCH route above.
+      // Without it this matched every scoped action path too (`/api/sources/:id/monkeys`), which
+      // then 404'd as a bogus source id instead of reporting the real problem: wrong method.
+      if (pathname.startsWith('/api/sources/') && !pathname.slice('/api/sources/'.length).includes('/') && req.method === 'DELETE') {
         const id = decodeURIComponent(pathname.slice('/api/sources/'.length))
         const removed = await registry.remove(id)
         return sendJson(res, removed ? 200 : 404, removed ? { id } : { error: 'Source not found' })
@@ -442,6 +476,13 @@ export function createServer({ token = null, distRoot = null, initialSources = [
         const [, id, action, tail] = scoped
         const source = registry.get(decodeURIComponent(id))
         if (!source) return sendJson(res, 404, { error: 'Source not found' })
+        // The read actions previously ignored the method entirely, so `DELETE .../monkeys`
+        // cheerfully performed the read. Only the two write actions below declare a method, so
+        // gate the reads on GET here rather than repeating the check five times.
+        const READ_ACTIONS = new Set(['monkeys', 'manifest', 'directories', 'import-files', 'save-list'])
+        if (READ_ACTIONS.has(action) && req.method !== 'GET') {
+          return sendJson(res, 405, { error: 'Method not allowed' })
+        }
         try {
           if (action === 'monkeys') return sendJson(res, 200, await source.listMonkeys())
           if (action === 'manifest') return sendJson(res, 200, await source.buildManifest(decodeURIComponent(tail || '')))

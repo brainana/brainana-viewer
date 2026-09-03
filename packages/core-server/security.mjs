@@ -1,6 +1,7 @@
 // Tool-agnostic security primitives: per-launch session token and path containment.
 // No Viewer-domain knowledge lives here so core/ can be lifted into a shared package later.
 import crypto from 'node:crypto'
+import fs from 'node:fs'
 import path from 'node:path'
 
 // ---------------------------------------------------------------------------
@@ -118,6 +119,28 @@ export function cleanRelative(raw = '') {
     throw new Error('Invalid path')
   }
   return parts.join('/')
+}
+
+// Containment that survives symlinks.
+//
+// isWithin() above compares LEXICALLY — it never touches the filesystem — so a symlink inside the
+// root pointing out of it passes, and whatever follows (readdir, createReadStream) then dutifully
+// follows the link. cleanRelative already blocks `..` in client input, which makes a symlink the
+// remaining way out.
+//
+// Both sides are resolved to their real paths before comparing. `root` should be pre-resolved once
+// by the caller (a data root does not move) so this costs ONE extra syscall per request, not one
+// per byte range. A path that cannot be resolved — missing file, broken link, EACCES — is treated
+// as outside: the caller reports "not found", which is also what it should say about a file it is
+// not allowed to reach.
+export function isWithinReal(resolvedRoot, candidate) {
+  let realCandidate
+  try {
+    realCandidate = fs.realpathSync(candidate)
+  } catch {
+    return false
+  }
+  return isWithin(resolvedRoot, realCandidate)
 }
 
 // Resolve a clean relative path against an absolute root, asserting containment.
