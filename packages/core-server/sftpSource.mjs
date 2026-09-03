@@ -270,16 +270,16 @@ export class SftpDataSource {
     // Never rewrite a file that was materialised for real (a surface binary read by
     // ensureDerivedAssets); only placeholders and not-yet-created files are sized.
     if (exists(abs) && !this.placeholders.has(abs)) return
-    // Sized SPARSELY to the remote length: no bytes cross the wire and none are stored, but the
-    // manifest provider's size-based rules work on a remote source exactly as they do on a local
-    // one. Without this every zero-length placeholder looked like brainana's `.dummy` sentinel, so
+    // Sized to the remote length: no bytes cross the wire and none are stored, but the manifest
+    // provider's size-based rules work on a remote source exactly as they do on a local one.
+    // Without this every zero-length placeholder looked like brainana's `.dummy` sentinel, so
     // the provider dropped the file — which is what hid the full-FOV conform on every SFTP source.
-    const fd = fs.openSync(abs, 'a')
-    try {
-      fs.ftruncateSync(fd, size)
-    } finally {
-      fs.closeSync(fd)
-    }
+    //
+    // Use writeFileSync(flag:'ax') + truncateSync instead of open('a') + ftruncateSync:
+    // Windows does not allow ftruncate on an append-mode fd (EPERM, errno -4048); truncateSync
+    // opens with the right flags internally and works on all platforms.
+    if (!exists(abs)) fs.writeFileSync(abs, Buffer.alloc(0), { flag: 'ax' })
+    fs.truncateSync(abs, size)
     this.placeholders.set(abs, rel)
   }
 
