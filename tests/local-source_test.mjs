@@ -31,6 +31,9 @@ async function buildFixture() {
   // single-dir selection must pick fsnative for every volume-side asset (volume + LUT + retino/somato).
   const flatAnat = path.join(root, 'sub-flat', 'anat')
   await write(flatAnat, 'sub-flat_space-T1w_desc-preproc_T1w.nii.gz')
+  // The uncropped conform. Written WITHOUT a sidecar at first so the manifest's status-unknown path
+  // is exercised; the test writes the sidecar later and re-fetches.
+  await write(flatAnat, 'sub-flat_space-T1w_desc-conformFullFOV_T1w.nii.gz')
   const flatFsnative = path.join(flatAnat, 'atlas_space-fsnative')
   await write(flatFsnative, 'atlas-ARM1_space-fsnative_sub-flat.nii.gz')
   await write(flatFsnative, 'atlas-ARM1.tsv')
@@ -45,6 +48,9 @@ async function buildFixture() {
   // chosen volume dir falls back to T1w, yet the atlas surface overlay still resolves from fsnative.
   const sesAnat = path.join(root, 'sub-ses', 'ses-001', 'anat')
   await write(sesAnat, 'sub-ses_ses-001_space-T1w_desc-preproc_T1w.nii.gz')
+  // Nextflow substitutes an empty sentinel when the optional full-FOV output is missing — the
+  // manifest must treat a zero-byte file as "no full-FOV volume", not as a loadable one.
+  await fsp.writeFile(path.join(sesAnat, 'sub-ses_ses-001_space-T1w_desc-conformFullFOV_T1w.nii.gz'), '')
   const sesT1w = path.join(sesAnat, 'atlas_space-T1w')
   await write(sesT1w, 'atlas-ARM1_space-T1w_sub-ses_ses-001.nii.gz')
   await write(sesT1w, 'atlas-ARM1.tsv')
@@ -85,6 +91,38 @@ async function main() {
     assert.match(source.id, /^local-[0-9a-f]{12}$/, 'source id is scoped local-<hex>')
     ok('POST /api/sources opens a local source')
 
+    // --- every route that returns a source must return the SAME summary ---
+    // The shape used to be hand-built per route, so a field added to one reached only some callers:
+    // `root` was present on GET but missing from POST, and since SourceManager caches the POST
+    // response rather than re-listing, a dataset added mid-session had no root for the rest of it.
+    const listed = await (await fetch(`${base}/api/sources`, { headers: auth })).json()
+    const fromList = listed.find((entry) => entry.id === source.id)
+    assert.deepEqual(Object.keys(source).sort(), Object.keys(fromList).sort(), 'POST and GET agree on the summary shape')
+    assert.deepEqual(source, fromList, 'and on its values')
+
+    const patched = await (
+      await fetch(`${base}/api/sources/${source.id}`, {
+        method: 'PATCH',
+        headers: { ...auth, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ customLabel: 'renamed' }),
+      })
+    ).json()
+    assert.deepEqual(Object.keys(patched).sort(), Object.keys(source).sort(), 'PATCH agrees on the summary shape too')
+    assert.equal(patched.customLabel, 'renamed')
+    ok('POST, GET and PATCH return the same source summary shape')
+
+    // The summary carries the absolute root, so a client can show a real path (the report does).
+    assert.equal(source.root, fixtureRoot, 'POST reports the absolute source root')
+    assert.equal(fromList.root, fixtureRoot, 'GET reports it')
+    assert.equal(patched.root, fixtureRoot, 'PATCH reports it')
+    // Restore the original label so later assertions see the source as they expect.
+    await fetch(`${base}/api/sources/${source.id}`, {
+      method: 'PATCH',
+      headers: { ...auth, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ customLabel: '' }),
+    })
+    ok('the source summary carries the absolute root on every route')
+
     // --- list monkeys (both flat + session subjects) ---
     const monkeys = await (await fetch(`${base}/api/sources/${source.id}/monkeys`, { headers: auth })).json()
     const ids = monkeys.map((m) => m.id).sort()
@@ -100,6 +138,34 @@ async function main() {
       assert.equal(manifest.capabilities.volume, true)
     }
     ok('buildManifest returns source-scoped anatomy URL for flat + session layouts')
+
+    // --- full-FOV volume: offered when present and non-empty, absent otherwise ---
+    {
+      const getManifest = async (subjectId) =>
+        await (await fetch(`${base}/api/sources/${source.id}/manifest/${subjectId}`, { headers: auth })).json()
+
+      const noSidecar = await getManifest('sub-flat')
+      assert.ok(noSidecar.fullFov, 'sub-flat offers the full-FOV volume')
+      assert.match(noSidecar.fullFov.url, /desc-conformFullFOV_T1w\.nii\.gz$/, 'points at the conform full-FOV file')
+      assert.ok(noSidecar.fullFov.url.startsWith(`/brainana-data/${source.id}/`), 'full-FOV URL is source-scoped')
+      assert.equal(noSidecar.fullFov.status, null, 'a missing sidecar yields a null status, not a throw')
+      assert.ok(
+        !noSidecar.volumes.some((v) => /conformFullFOV/i.test(v.url)),
+        'the full-FOV volume stays out of volumes[] — the fov switch owns it, not the dropdown',
+      )
+
+      // Same request again once the sidecar exists: the padding status is read through.
+      await fsp.writeFile(
+        path.join(fixtureRoot, 'sub-flat', 'anat', 'sub-flat_space-T1w_desc-conformFullFOV_T1w.json'),
+        JSON.stringify({ FullFOVPadding: { left: [44, 11, 13], right: [45, 13, 13], status: 'expanded' } }),
+      )
+      const withSidecar = await getManifest('sub-flat')
+      assert.equal(withSidecar.fullFov.status, 'expanded', 'FullFOVPadding.status is read from the sidecar')
+
+      const sesM = await getManifest('sub-ses')
+      assert.equal(sesM.fullFov, null, 'a zero-byte sentinel is not offered as a full-FOV volume')
+    }
+    ok('buildManifest exposes fullFov, reads its sidecar status, and rejects empty sentinels')
 
     // --- single atlas space directory: fsnative wins, everything volume-side from that one dir ---
     const flatM = await (await fetch(`${base}/api/sources/${source.id}/manifest/sub-flat`, { headers: auth })).json()

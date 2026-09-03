@@ -1,6 +1,6 @@
-# Brainana Tools — Technical Route
+# Brainana Viewer — Technical Route
 
-**Scope:** `/home/star/github/brainana_tools` — an **npm-workspaces monorepo**: tool-agnostic shared
+**Scope:** `/home/star/github/brainana-viewer` — an **npm-workspaces monorepo**: tool-agnostic shared
 `packages/*` consumed by per-tool `apps/*`. Today the only app is the **Viewer**; the Aligner and
 Editor are planned as future `apps/*` reusing the same packages (see
 [adding-a-tool.md](adding-a-tool.md)).

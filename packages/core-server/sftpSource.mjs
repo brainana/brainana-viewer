@@ -26,6 +26,13 @@ const SURF_FILES = new Set([
   'lh.thickness', 'rh.thickness',
 ])
 
+// Sidecars the manifest provider READS rather than merely lists (brainana writes a .json beside
+// each output; buildManifest parses e.g. FullFOVPadding.status out of it). A sparse placeholder has
+// no bytes to parse, so these are fetched for real — they are metadata, measured in hundreds of
+// bytes. The cap is a guard against a pathological file, not a real expectation.
+const SIDECAR_MAX_BYTES = 1024 * 1024
+const isReadableSidecar = (name, size) => /\.json$/i.test(name) && size > 0 && size <= SIDECAR_MAX_BYTES
+
 function exists(p) {
   try {
     return fs.existsSync(p)
@@ -56,6 +63,46 @@ export class SftpDataSource {
     this.placeholders = new Map() // mirrorAbs -> remote relative path
     this.#monkeyCache = null
     fs.mkdirSync(this.mirrorRoot, { recursive: true })
+    this.#loadPlaceholders()
+  }
+
+  // ---- placeholder registry ----
+  //
+  // Placeholders are sparse stand-ins that make the mirror LOOK like the remote tree so the injected
+  // manifest provider can glob it. They must be distinguishable from files materialised for real —
+  // and the mirror outlives the process (it lives in the on-disk cache), so a RAM-only Map meant a
+  // later session mistook every placeholder for a real file and served its empty bytes as data.
+  // Persisting the set alongside the files it describes is what makes the mirror self-describing.
+  //
+  // Dot-prefixed so the directory listings (which skip dotfiles) and the manifest's filename
+  // patterns never see it.
+  #registryPath() {
+    return path.join(this.mirrorRoot, '.brainana-placeholders.json')
+  }
+
+  #loadPlaceholders() {
+    try {
+      const listed = JSON.parse(fs.readFileSync(this.#registryPath(), 'utf8'))
+      if (!Array.isArray(listed)) return
+      for (const rel of listed) {
+        try {
+          this.placeholders.set(this.#mirrorAbs(rel), rel)
+        } catch {
+          // A path that no longer cleans (renamed remote, edited file) is simply dropped.
+        }
+      }
+    } catch {
+      // Absent or corrupt registry: start empty. Every placeholder is then re-registered by the
+      // next #materialize, and until then openFile fetches from the remote — slow, never wrong.
+    }
+  }
+
+  #savePlaceholders() {
+    try {
+      fs.writeFileSync(this.#registryPath(), JSON.stringify([...this.placeholders.values()]))
+    } catch {
+      // Best-effort: a read-only cache dir costs a re-fetch, not correctness.
+    }
   }
 
   #monkeyCache
@@ -197,14 +244,43 @@ export class SftpDataSource {
     return out
   }
 
-  #addPlaceholder(rel, type) {
-    const abs = this.#mirrorAbs(rel)
-    if (type === 'directory') fs.mkdirSync(abs, { recursive: true })
-    else {
-      fs.mkdirSync(path.dirname(abs), { recursive: true })
-      if (!exists(abs)) fs.closeSync(fs.openSync(abs, 'a'))
-      this.placeholders.set(abs, rel)
+  // Pull a remote file into the mirror as REAL bytes (via the cache) and de-register any
+  // placeholder standing in for it, so openFile serves the mirror copy directly.
+  async #materializeFile(rel, size, mtimeMs) {
+    const mirrorAbs = this.#mirrorAbs(rel)
+    try {
+      const cached = await this.cache.ensure(rel, { size, mtimeMs }, (tmp) => this.client.fastGet(this.#remoteAbs(rel), tmp))
+      fs.mkdirSync(path.dirname(mirrorAbs), { recursive: true })
+      fs.copyFileSync(cached, mirrorAbs)
+      this.placeholders.delete(mirrorAbs) // now a real file
+    } catch {
+      // A sidecar that will not transfer must not fail the whole subject: fall back to a
+      // placeholder, and the provider treats it as "status unknown" exactly as it does locally.
+      this.#addPlaceholder(rel, 'file', size)
     }
+  }
+
+  #addPlaceholder(rel, type, size = 0) {
+    const abs = this.#mirrorAbs(rel)
+    if (type === 'directory') {
+      fs.mkdirSync(abs, { recursive: true })
+      return
+    }
+    fs.mkdirSync(path.dirname(abs), { recursive: true })
+    // Never rewrite a file that was materialised for real (a surface binary read by
+    // ensureDerivedAssets); only placeholders and not-yet-created files are sized.
+    if (exists(abs) && !this.placeholders.has(abs)) return
+    // Sized to the remote length: no bytes cross the wire and none are stored, but the manifest
+    // provider's size-based rules work on a remote source exactly as they do on a local one.
+    // Without this every zero-length placeholder looked like brainana's `.dummy` sentinel, so
+    // the provider dropped the file — which is what hid the full-FOV conform on every SFTP source.
+    //
+    // Use writeFileSync(flag:'ax') + truncateSync instead of open('a') + ftruncateSync:
+    // Windows does not allow ftruncate on an append-mode fd (EPERM, errno -4048); truncateSync
+    // opens with the right flags internally and works on all platforms.
+    if (!exists(abs)) fs.writeFileSync(abs, Buffer.alloc(0), { flag: 'ax' })
+    fs.truncateSync(abs, size)
+    this.placeholders.set(abs, rel)
   }
 
   async #materialize(subjectId) {
@@ -212,11 +288,25 @@ export class SftpDataSource {
     // Mirror the subject subtree (anat + any ses-*/anat) as placeholders.
     const subjectEntries = await this.#listRemoteRecursive(clean, 5)
     this.#addPlaceholder(clean, 'directory')
-    for (const e of subjectEntries) this.#addPlaceholder(e.relativePath, e.type === 'directory' ? 'directory' : 'file')
+    for (const e of subjectEntries) {
+      if (e.type === 'directory') {
+        this.#addPlaceholder(e.relativePath, 'directory')
+        continue
+      }
+      if (isReadableSidecar(e.name, e.size)) {
+        await this.#materializeFile(e.relativePath, e.size, e.mtimeMs)
+        continue
+      }
+      this.#addPlaceholder(e.relativePath, 'file', e.size)
+    }
 
     // Fetch real surface binaries so ensureDerivedAssets can parse them.
     const fsRel = `fastsurfer/${clean}`
-    if (await this.client.exists(this.#remoteAbs(fsRel))) {
+    if (!(await this.client.exists(this.#remoteAbs(fsRel)))) {
+      this.#savePlaceholders()
+      return
+    }
+    {
       const fsEntries = await this.#listRemoteRecursive(fsRel, 3)
       this.#addPlaceholder(fsRel, 'directory')
       for (const e of fsEntries) {
@@ -224,18 +314,15 @@ export class SftpDataSource {
           this.#addPlaceholder(e.relativePath, 'directory')
           continue
         }
-        if (SURF_FILES.has(e.name)) {
-          const info = await this.client.stat(this.#remoteAbs(e.relativePath))
-          const cached = await this.cache.ensure(e.relativePath, info, (tmp) => this.client.fastGet(this.#remoteAbs(e.relativePath), tmp))
-          const mirrorAbs = this.#mirrorAbs(e.relativePath)
-          fs.mkdirSync(path.dirname(mirrorAbs), { recursive: true })
-          fs.copyFileSync(cached, mirrorAbs)
-          this.placeholders.delete(mirrorAbs) // now a real file
+        if (SURF_FILES.has(e.name) || isReadableSidecar(e.name, e.size)) {
+          await this.#materializeFile(e.relativePath, e.size, e.mtimeMs)
         } else {
-          this.#addPlaceholder(e.relativePath, 'file')
+          this.#addPlaceholder(e.relativePath, 'file', e.size)
         }
       }
     }
+    // One write per materialise, not per file.
+    this.#savePlaceholders()
   }
 
   async buildManifest(subjectId) {

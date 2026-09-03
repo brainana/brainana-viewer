@@ -77,6 +77,21 @@ export interface SurfaceNode {
   index: number
 }
 
+/** Flat geometry arrays as NVMesh stores them (3 floats per vertex, 3 indices per face). */
+export interface MeshArrays {
+  pts?: ArrayLike<number>
+  tris?: ArrayLike<number>
+}
+
+/** One loaded asset, as reported by MultiView.loadedAssets(). `hdr` is the raw NIfTI header for a
+ *  volume; `mesh` the geometry arrays for a surface. Never both. */
+export interface LoadedAsset {
+  role: string
+  url: string | null
+  hdr: unknown | null
+  mesh: MeshArrays | null
+}
+
 // Per-hemisphere vertex adjacency in CSR (compressed sparse row) form, built once per subject from
 // the reference mesh triangles. Vertex v's neighbours are neighbors[offsets[v] .. offsets[v + 1]].
 // `visited` is generation-stamped scratch for the drag walk (see walkNode) so no per-frame clearing
@@ -125,13 +140,32 @@ export class MultiView {
   #walkGen = 0 // increments per walkNode call to stamp the BFS visited scratch without clearing it
   #crosshairCb: ((info: CrosshairInfo) => void) | null = null
   #syncing = false
+  // Source URLs of everything currently loaded, recorded at load time. NiiVue's NVImage/NVMesh
+  // do not retain the URL they were fetched from, and the report has to name the files it
+  // describes — so each loader stamps its URL here. Purely descriptive; nothing renders from it.
+  #urls: { base: string | null; atlas: string | null; atlasName: string | null; functional: string | null; surface: SurfacePairUrls | null; report: Map<string, string> } = {
+    base: null,
+    atlas: null,
+    atlasName: null,
+    functional: null,
+    surface: null,
+    report: new Map(),
+  }
 
   constructor(slicesCanvas: HTMLCanvasElement, renderCanvas: HTMLCanvasElement, client: RuntimeClient) {
     this.#client = client
     this.slices = niivue()
     this.render = niivue()
-    this.slices.attachToCanvas(slicesCanvas)
-    this.render.attachToCanvas(renderCanvas)
+    // KNOWN HAZARD (audit N2). attachToCanvas is async — NiiVue's own docs `await` it — but a
+    // constructor cannot. So every call below runs against an instance whose GL context may not be
+    // attached yet. It works today because NiiVue tolerates the ordering, not because we ensured
+    // it; a NiiVue upgrade could turn this into an intermittent blank canvas.
+    //
+    // The fix is to make MultiView an async factory (`static async create(...)`), which changes how
+    // the dashboard builds it. That is deliberately NOT bundled into a lint pass: this file has no
+    // test coverage, so the change needs its own commit and its own verification.
+    void this.slices.attachToCanvas(slicesCanvas)
+    void this.render.attachToCanvas(renderCanvas)
     this.slices.setSliceType(SLICE_TYPE.MULTIPLANAR)
     // The surface lives in its own RENDER instance; keep the slice montage to pure planes.
     this.slices.opts.multiplanarShowRender = SHOW_RENDER.NEVER
@@ -199,14 +233,24 @@ export class MultiView {
 
   // Load (or switch) the base volume. The volume lives ONLY in the slices instance — the
   // surface pane shows the cortical surface + marker, never 3D volume slices.
-  async setBaseVolume(url: string, opacity = 1): Promise<void> {
+  //
+  // Two controls drive this (the volume dropdown and the fov switch), so overlapping loads are
+  // reachable: without a token, a slow loser's removeVolume() would delete the winner's volume and
+  // leave #urls.base describing the wrong file. Latest wins; a superseded load is discarded.
+  // Returns whether this load was actually applied, so callers can skip re-seeding the underlay rail.
+  #baseToken = 0
+  async setBaseVolume(url: string, opacity = 1): Promise<boolean> {
+    const token = ++this.#baseToken
     const img = await NVImage.loadFromUrl({ url: this.#client.dataUrl(url), colormap: 'gray', opacity })
+    if (token !== this.#baseToken) return false // a newer switch already landed
     if (this.#baseVol) this.slices.removeVolume(this.#baseVol)
     this.slices.addVolume(img)
     this.slices.setVolume(img, 0)
     this.#baseVol = img
+    this.#urls.base = url
     this.#baseOrig = null // drop the previous volume's clip cache; re-captured on first clip
     this.#baseClip = undefined // no mask applied to the freshly loaded voxels
+    return true
   }
 
   setVolumeOpacity(opacity: number): void {
@@ -309,12 +353,15 @@ export class MultiView {
   }
 
   // ---- atlas volume overlay (colored label map on the slices) ----
-  async loadAtlasOverlay(url: string, opacity: number): Promise<void> {
+  // `name` is descriptive only (the report names which atlas is overlaid); nothing renders from it.
+  async loadAtlasOverlay(url: string, opacity: number, name: string | null = null): Promise<void> {
     const vol = await NVImage.loadFromUrl({ url: this.#client.dataUrl(url), opacity })
     vol.trustCalMinMax = false
     if (this.#atlasVol) this.slices.removeVolume(this.#atlasVol)
     this.slices.addVolume(vol)
     this.#atlasVol = vol
+    this.#urls.atlas = url
+    this.#urls.atlasName = name
     this.#prepareAtlasLabelState(vol)
   }
 
@@ -442,6 +489,8 @@ export class MultiView {
       this.slices.removeVolume(this.#atlasVol)
       this.#atlasVol = null
     }
+    this.#urls.atlas = null
+    this.#urls.atlasName = null
   }
 
   // ---- functional overlay (retinotopy/somatotopy 4D volume with F-threshold masking) ----
@@ -454,6 +503,7 @@ export class MultiView {
     const vol = await this.slices.addVolumeFromUrl({ url: this.#client.dataUrl(url), colormap, opacity })
     vol.trustCalMinMax = false
     this.#funcVol = vol
+    this.#urls.functional = url
     const dims = vol.hdr?.dims ?? []
     const frameSize = (dims[1] || 1) * (dims[2] || 1) * (dims[3] || 1)
     const frames = dims[4] && dims[4] > 1 ? dims[4] : 1
@@ -472,6 +522,7 @@ export class MultiView {
     this.#funcVol = null
     this.#funcMeta = null
     this.#funcSampler = null
+    this.#urls.functional = null
   }
 
   setFunctionalOpacity(opacity: number): void {
@@ -589,11 +640,13 @@ export class MultiView {
   async loadReportVolume(key: string, url: string): Promise<void> {
     const vol = await NVImage.loadFromUrl({ url: this.#client.dataUrl(url) })
     this.#reportVols.set(key, vol)
+    this.#urls.report.set(key, url)
     this.#reportContinuous.set(key, this.#imgHasNonInteger(vol))
   }
 
   clearReportVolumes(): void {
     this.#reportVols.clear()
+    this.#urls.report.clear()
     this.#reportContinuous.clear()
   }
 
@@ -628,6 +681,36 @@ export class MultiView {
   // Whether a report atlas is a continuous float map (report its value) vs an integer parcellation.
   reportVolumeContinuous(key: string): boolean {
     return this.#reportContinuous.get(key) ?? false
+  }
+
+  // Descriptive inventory of everything currently loaded, for the HTML report: each asset's role,
+  // the URL it came from, and its raw NIfTI header (volumes) or geometry arrays (surfaces).
+  // Deliberately returns RAW headers rather than formatted ones — report/header.ts owns the
+  // formatting so it stays pure and unit-testable, and this stays a plain read of existing state.
+  loadedAssets(): LoadedAsset[] {
+    const out: LoadedAsset[] = []
+    const vol = (role: string, image: NVImage | null, url: string | null): void => {
+      if (image) out.push({ role, url, hdr: (image as unknown as { hdr?: unknown }).hdr ?? null, mesh: null })
+    }
+    vol('base volume', this.#baseVol, this.#urls.base)
+    vol(this.#urls.atlasName ? `atlas overlay: ${this.#urls.atlasName}` : 'atlas overlay', this.#atlasVol, this.#urls.atlas)
+    // The unmasked clone is the one the report samples, so it is the one worth describing.
+    vol('functional map', this.#funcSampler, this.#urls.functional)
+    for (const [key, image] of this.#reportVols) vol(`atlas (sampled): ${key}`, image, this.#urls.report.get(key) ?? null)
+    const hemi = ['left', 'right'] as const
+    this.#displayMeshes.forEach((mesh, i) => {
+      if (!mesh) return
+      const url = i === 0 ? this.#urls.surface?.left : this.#urls.surface?.right
+      out.push({ role: `surface (${hemi[i] ?? i})`, url: url ?? null, hdr: null, mesh: mesh as unknown as MeshArrays })
+    })
+    // Morphology shading sources are per-hemisphere .shape.gii layers on the display mesh; they
+    // carry no separate geometry, so they are listed by URL alone.
+    for (const [metric, pair] of Object.entries(this.#morphPairs)) {
+      if (!pair) continue
+      out.push({ role: `morphometry: ${metric} (left)`, url: pair.left, hdr: null, mesh: null })
+      out.push({ role: `morphometry: ${metric} (right)`, url: pair.right, hdr: null, mesh: null })
+    }
+    return out
   }
 
   // Montage layouts: how the 3 slice planes arrange within the slice instance. The surface pane
@@ -787,6 +870,7 @@ export class MultiView {
 
   async setSurface(pair: SurfacePairUrls | null, morphology: MorphologyShapePairs | null, overlay: SurfaceOverlay | null = null, display: MorphologyDisplay | null = null): Promise<void> {
     this.#clearDisplayMeshes()
+    this.#urls.surface = pair
     if (!pair) return
     this.#morphPairs = morphology ?? {}
     this.#morphDisplay = display

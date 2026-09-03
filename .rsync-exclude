@@ -7,7 +7,7 @@
 # Copy source only, then run `npm install` fresh on the target machine.
 #
 # Usage:
-#   rsync -a --exclude-from='.rsync-exclude' ./ user@host:/path/to/brainana_tools/
+#   rsync -a --exclude-from='.rsync-exclude' ./ user@host:/path/to/brainana-viewer/
 # (or use --filter=': .gitignore' with git, but this file also works for scp/zip flows)
 
 # Dependencies (platform-specific native binaries — reinstall on target)

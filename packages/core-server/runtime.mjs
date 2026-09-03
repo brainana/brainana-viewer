@@ -1,6 +1,9 @@
 // Tool-agnostic HTTP runtime: an unbound server that manages a registry of data sources.
 //
 //   - Binds 127.0.0.1 only (never 0.0.0.0/::) — fixes finding R5.
+//   - Refuses any request whose Host header is not loopback, BEFORE routing. The bind decides
+//     which interface accepts a connection; the Host check decides which NAME may address it,
+//     which is what stops DNS rebinding from reading the token out of index.html.
 //   - Guards every /api/* and /brainana-data route with a per-launch session token
 //     (timing-safe) — the launcher generates it and it is templated into index.html at
 //     serve time, so it never appears in a URL or history.
@@ -13,11 +16,11 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import crypto from 'node:crypto'
-import { SourceRegistry, SOURCE_ID_PATTERN } from './dataSource.mjs'
+import { SourceRegistry, SOURCE_ID_PATTERN, summarizeSource } from './dataSource.mjs'
 import { LocalDataSource } from './localSource.mjs'
 import { SftpDataSource } from './sftpSource.mjs'
 import { SftpClient } from './sftpClient.mjs'
-import { createTokenGuard, isWithin, TOKEN_COOKIE } from './security.mjs'
+import { createTokenGuard, isWithin, isLoopbackHost, TOKEN_COOKIE } from './security.mjs'
 import { versionInfo } from './version.mjs'
 
 function exists(p) {
@@ -295,7 +298,17 @@ export function createServer({ token = null, distRoot = null, initialSources = [
   const server = http.createServer(async (req, res) => {
     try {
       await ready
-      const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`)
+      // ---- Loopback Host check: FIRST, before any route, including the static assets ----
+      // A 127.0.0.1 bind controls which interface accepts the connection, not which NAME the client
+      // used to reach it. A DNS-rebinding page on evil.com pointed at 127.0.0.1 gets through the
+      // bind, and index.html would hand it the session token in a <meta> tag — so this has to sit
+      // ahead of serveStatic and ahead of the unauthenticated health/version routes, not just ahead
+      // of the token guard. 421 is the status defined for a request sent to a server that is not
+      // authoritative for the requested host.
+      if (!isLoopbackHost(req.headers.host)) {
+        return sendJson(res, 421, { error: 'This server only answers requests addressed to localhost' })
+      }
+      const url = new URL(req.url, `http://${req.headers.host}`)
       const pathname = url.pathname
 
       // ---- Unauthenticated: health/version (no data, safe to expose on loopback) ----
@@ -348,9 +361,13 @@ export function createServer({ token = null, distRoot = null, initialSources = [
           const { connection } = await jsonBody(req)
           client = new SftpClient(connection)
           await client.connect()
-          const token = `remote-${crypto.randomBytes(9).toString('hex')}`
-          remoteBrowsers.set(token, { client, lastUsed: Date.now() })
-          return sendJson(res, 200, { token })
+          // NOT named `token`: that identifier is the per-launch SESSION token in this scope, and
+          // this is a short-lived browse-session handle with entirely different authority. Shadowing
+          // the session token inside the one handler that mints a second secret is how the two get
+          // confused, and confusing them here would be a security bug rather than a typo.
+          const browseToken = `remote-${crypto.randomBytes(9).toString('hex')}`
+          remoteBrowsers.set(browseToken, { client, lastUsed: Date.now() })
+          return sendJson(res, 200, { token: browseToken })
         } catch (error) {
           if (client) client.close().catch(() => {})
           return sendJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
@@ -404,7 +421,7 @@ export function createServer({ token = null, distRoot = null, initialSources = [
             )
           }
           registry.add(source, { type: source.type })
-          return sendJson(res, 200, { id: source.id, type: source.type, label: source.label, customLabel: source.customLabel ?? null })
+          return sendJson(res, 200, summarizeSource(source))
         } catch (error) {
           return sendJson(res, error?.statusCode || 400, { error: error instanceof Error ? error.message : String(error) })
         }
@@ -419,7 +436,7 @@ export function createServer({ token = null, distRoot = null, initialSources = [
           const body = await jsonBody(req)
           const trimmed = typeof body.customLabel === 'string' ? body.customLabel.trim() : ''
           source.customLabel = trimmed || null
-          return sendJson(res, 200, { id: source.id, type: source.type, label: source.label, customLabel: source.customLabel })
+          return sendJson(res, 200, summarizeSource(source))
         } catch (error) {
           return sendJson(res, 400, { error: error instanceof Error ? error.message : String(error) })
         }

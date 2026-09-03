@@ -23,13 +23,17 @@
     "predev": "node scripts/generate-version.mjs",
     "prestart": "node scripts/generate-version.mjs",
     "preserver": "node scripts/generate-version.mjs",
+    "predev:server": "node scripts/generate-version.mjs",
     "pretest": "node scripts/generate-version.mjs",
     "build": "tsc && vite build --config apps/viewer/vite.config.ts",
     "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
     "dev": "node apps/viewer/launch.mjs --dev",
     "dev:web": "vite --config apps/viewer/vite.config.ts",
     "start": "node apps/viewer/launch.mjs",
     "server": "node apps/viewer/server.mjs",
+    "//dev:server": "API server for the paired `dev:web` flow. Vite serves its own index.html, so the frontend never receives a templated session token — hence --no-token. Safe because the server still binds loopback only AND refuses any request whose Host is not loopback (see isLoopbackHost). Never use --no-token for anything but this.",
+    "dev:server": "node apps/viewer/server.mjs --port 5174 --no-token",
     "dev:desktop": "npm run build && electron apps/viewer/desktop.mjs",
     "dist:desktop": "npm run build && electron-builder --config apps/viewer/electron-builder.yml",
     "test": "node scripts/run-tests.mjs"
@@ -42,13 +46,17 @@
     "ssh2": "^1.16.0"
   },
   "devDependencies": {
-    "typescript": "^5.7.0",
-    "vite": "^6.0.0",
+    "@eslint/js": "^10.0.1",
     "@niivue/niivue": "^0.69.0",
-    "fflate": "^0.8.2",
-    "nifti-reader-js": "^0.8.0",
     "electron": "^33.0.0",
-    "electron-builder": "^25.0.0"
+    "electron-builder": "^25.0.0",
+    "eslint": "^10.9.1",
+    "fflate": "^0.8.2",
+    "globals": "^17.12.0",
+    "nifti-reader-js": "^0.8.0",
+    "typescript": "^5.7.0",
+    "typescript-eslint": "^8.69.0",
+    "vite": "^6.0.0"
   },
   "//browserslist": "Single source of the evergreen support policy (roadmap §6.3): Chrome/Edge baseline, Firefox/Safari last 2 majors. WebGL2 is a hard requirement gated at runtime in browserCapabilities.ts. Out of scope: mobile/legacy.",
   "browserslist": [

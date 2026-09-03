@@ -14,8 +14,8 @@ For installers see [desktop-app.md](desktop-app.md).
 1. **Terminal 1 — start the API/data server**
 
    ```sh
-   cd brainana_tools
-   npm run server -- --port 5174 \
+   cd brainana-viewer
+   npm run dev:server -- \
      --output-dir datasets/demo_viewer      # or your own /path/to/preprocessed/dataset
    ```
 
@@ -28,7 +28,7 @@ For installers see [desktop-app.md](desktop-app.md).
 2. **Terminal 2 — start the Vite dev server**
 
    ```sh
-   cd brainana_tools
+   cd brainana-viewer
    npm run dev:web
    ```
 
@@ -41,7 +41,7 @@ For installers see [desktop-app.md](desktop-app.md).
 | Service | Default | Notes |
 |---|---|---|
 | Vite (client) | 5173 | `npm run dev:web -- --port 5175 --strictPort` if taken |
-| Node API | 5173 | **Always pass `--port 5174`** so it doesn't collide with Vite |
+| Node API | 5173 | **Always pass `--port 5174`** so it doesn't collide with Vite (`dev:server` already does) |
 
 If the API runs on a non-default port: `BRAINANA_DEV_PORT=<port> npm run dev:web`.
 
@@ -65,7 +65,7 @@ Both should return `{ "ok": true, ... }`.
 1. **Build and launch**
 
    ```sh
-   cd brainana_tools
+   cd brainana-viewer
    npm run dev:desktop
    ```
 
@@ -85,7 +85,7 @@ Dev commands (`dev:desktop`) launch Electron against your working tree — they 
 produce something you can hand to a user. To get a **standalone app file per OS**, run:
 
 ```sh
-cd brainana_tools
+cd brainana-viewer
 npm run dist:desktop     # build the SPA, then electron-builder → apps/viewer/release/
 ```
 
@@ -124,7 +124,8 @@ notarization, native-module handling, and the full rationale, see
 | Command | Purpose |
 |---|---|
 | `npm run dev:web` | Vite + HMR (pair with `npm run server`) |
-| `npm run server -- --port 5174 --output-dir <path>` | API/data server only (`<path>` = `datasets/demo_viewer` for the bundled demo) |
+| `npm run dev:server -- --output-dir <path>` | API/data server for the paired `dev:web` flow — port 5174, guard off (`<path>` = `datasets/demo_viewer` for the bundled demo) |
+| `npm run server -- --output-dir <path>` | API/data server, session token required (printed on startup) |
 | `npm run dev:desktop` | Build + Electron |
 | `npm run dist:desktop` | Build + electron-builder → per-OS app file in `apps/viewer/release/` |
 | `npm run build` | Build static bundle → `dist/` |
@@ -149,8 +150,8 @@ handles `src/**` on its own; just hard-reload with Ctrl/Cmd-Shift-R).
 List only *your* Vite + API dev processes, with PIDs:
 
 ```sh
-# Your brainana_tools dev processes only (scoped to your user)
-pgrep -u "$USER" -af 'brainana_tools/node_modules/.bin/vite|npm run server|npm run dev:web'
+# Your brainana-viewer dev processes only (scoped to your user)
+pgrep -u "$USER" -af 'brainana-viewer/node_modules/.bin/vite|npm run server|npm run dev:web'
 ```
 
 Or find what *you* have listening on the dev ports:

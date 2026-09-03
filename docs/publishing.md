@@ -61,7 +61,7 @@ repo; the built apps become **Release assets**. The GitHub repo layout you alrea
 
    The Release **destination** is pinned in
    [../apps/viewer/electron-builder.yml](../apps/viewer/electron-builder.yml) (`publish.owner` /
-   `repo` = `arcaro-lab/brainana_tools`). Push the `v*` tag to **that** repo: the workflow's
+   `repo` = `brainana/brainana-viewer`). Push the `v*` tag to **that** repo: the workflow's
    `GITHUB_TOKEN` can only publish to the repo it runs in, so the tag and the `publish.owner` must
    name the same repo. Enable **Settings → Actions** on it (step 2).
 
@@ -117,7 +117,7 @@ git push origin main                             # upload the commit
 Do this from the GitHub web UI — **publishing the Release is the trigger, and it creates the tag
 for you.** You do NOT push a git tag separately.
 
-1. On github.com → **arcaro-lab/brainana_tools** → **Releases** → **Draft a new release**.
+1. On github.com → **brainana/brainana-viewer** → **Releases** → **Draft a new release**.
 2. **Choose a tag** → type `v1.0.0` → pick **"Create new tag: v1.0.0 on publish"**.
    (The tag must start with `v` and equal `package.json`'s `version`.)
 3. **Target** → **`main`** (the branch tip you pushed in step 3, which carries this version).

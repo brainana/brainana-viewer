@@ -6,16 +6,75 @@
 // This keeps the "no code runs on the workstation" property of the old SSH layer: we use
 // the SFTP subsystem only, no remote shell commands, so it is also remote-OS-agnostic
 // (fixes R4 — no reliance on GNU find/stat).
+import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import crypto from 'node:crypto'
+import { parseKnownHosts, verifyHostKey } from './knownHosts.mjs'
+
+// The SSH wire format for a public key begins with its own algorithm name as a length-prefixed
+// string ("ssh-ed25519", "ssh-rsa", ...) — which is the same name known_hosts records. Read it
+// straight off the blob rather than via ssh2.utils.parseKey, so the trust decision does not depend
+// on the library whose default behaviour (trust everything) we are correcting.
+function wireKeyType(blob) {
+  if (!Buffer.isBuffer(blob) || blob.length < 4) return null
+  const length = blob.readUInt32BE(0)
+  if (length <= 0 || length > 64 || blob.length < 4 + length) return null
+  return blob.subarray(4, 4 + length).toString('utf8')
+}
+
+// The SHA256 fingerprint in the form OpenSSH prints, so a user can compare what we report against
+// what `ssh-keygen -lf` or their server's own records say.
+function fingerprint(blob) {
+  return `SHA256:${crypto.createHash('sha256').update(blob).digest('base64').replace(/=+$/, '')}`
+}
 
 export class SftpClient {
   #conn = null
   #sftp = null
 
-  constructor({ host, port = 22, username, password, privateKey, passphrase, agent, keepaliveInterval = 15000, readyTimeout = 20000 } = {}) {
+  // Path to the known_hosts file consulted for host-key verification. Held separately from
+  // `options` because everything in `options` is forwarded verbatim to ssh2's connect().
+  #knownHostsPath
+
+  constructor({ host, port = 22, username, password, privateKey, passphrase, agent, keepaliveInterval = 15000, readyTimeout = 20000, knownHostsPath } = {}) {
     if (!host || !username) throw new Error('SFTP connection requires host and username')
     this.options = { host, port, username, password, privateKey, passphrase, agent, keepaliveInterval, readyTimeout }
+    this.#knownHostsPath = knownHostsPath || path.join(os.homedir(), '.ssh', 'known_hosts')
+  }
+
+  // Decide whether to accept the host key the server just presented.
+  //
+  // ssh2 accepts ANY key when no hostVerifier is given, so without this the password below is sent
+  // to whoever answered the port. Returns null to accept, or the Error to fail the connection with.
+  // An unreadable or absent known_hosts is treated as empty — first contact, refused — never as
+  // permission to skip the check.
+  #checkHostKey(blob) {
+    const { host, port } = this.options
+    const keyType = wireKeyType(blob)
+    const keyBase64 = blob.toString('base64')
+    let text = ''
+    try {
+      text = fs.readFileSync(this.#knownHostsPath, 'utf8')
+    } catch {
+      text = ''
+    }
+    const status = verifyHostKey(parseKnownHosts(text), { host, port, keyType, keyBase64 })
+    if (status === 'match') return null
+    const where = `${host}:${port}`
+    if (status === 'mismatch') {
+      return new Error(
+        `SSH host key CHANGED for ${where}. The key it presented (${keyType} ${fingerprint(blob)}) does not match the one recorded in ${this.#knownHostsPath}. ` +
+          'This is what a machine-in-the-middle attack looks like; it can also mean the server was rebuilt. Verify the fingerprint out of band before removing the old entry.',
+      )
+    }
+    if (status === 'revoked') {
+      return new Error(`SSH host key for ${where} is marked @revoked in ${this.#knownHostsPath} (${keyType} ${fingerprint(blob)}). Refusing to connect.`)
+    }
+    return new Error(
+      `Unrecognised SSH host key for ${where} (${keyType} ${fingerprint(blob)}). Refusing to connect to an unverified host. ` +
+        `If you trust this server, record its key first — \`ssh-keyscan -p ${port} ${host} >> ~/.ssh/known_hosts\`, or simply \`ssh ${this.options.username}@${host}\` once — then try again.`,
+    )
   }
 
   async connect() {
@@ -29,8 +88,17 @@ export class SftpClient {
     const conn = new Client()
     // Drop undefined auth fields so ssh2 falls back to the agent / other methods cleanly.
     const opts = Object.fromEntries(Object.entries(this.options).filter(([, v]) => v !== undefined))
+    // Rejecting from hostVerifier makes ssh2 emit a generic handshake error, which would tell the
+    // user nothing about WHY. Stash the real reason and surface it in place of that error.
+    let hostKeyError = null
+    opts.hostVerifier = (blob) => {
+      hostKeyError = this.#checkHostKey(blob)
+      return hostKeyError == null
+    }
     await new Promise((resolve, reject) => {
-      conn.on('ready', resolve).on('error', reject).connect(opts)
+      conn.on('ready', resolve)
+        .on('error', (error) => reject(hostKeyError ?? error))
+        .connect(opts)
     })
     // The connection is now open; if the SFTP subsystem fails to start, tear the connection
     // down before surfacing the error so we never leak a dangling SSH/TCP connection.

@@ -20,6 +20,13 @@ export interface FunctionalMap {
   surface: SurfacePair | null
 }
 
+export interface FullFovVolume {
+  url: string
+  label: string
+  /** brainana's FullFOVPadding.status: 'expanded' | 'no_expansion_needed' | 'fallback'; null if the sidecar was unreadable. */
+  status: string | null
+}
+
 export interface Manifest {
   id: string
   label: string
@@ -27,6 +34,9 @@ export interface Manifest {
   relativePath: string
   anatomy: string | null
   volumes: Array<{ key: string; label: string; url: string }>
+  // The uncropped conform (space-T1w, desc-conformFullFOV). Same world frame as `volumes`, just a
+  // larger box; null for datasets processed before brainana 2.1 or with conform disabled.
+  fullFov: FullFovVolume | null
 
   atlases: AtlasEntry[]
   function: {

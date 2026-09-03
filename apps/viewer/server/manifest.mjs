@@ -70,6 +70,35 @@ function pick(files, patterns) {
   return null
 }
 
+// The uncropped conform: same world frame and 1 mm lattice as the processed T1w, just a larger box,
+// so it can be swapped in as the underlay with no resample. Absent for pre-2.1 runs and whenever
+// anat.conform is disabled; the workflow also substitutes empty `.dummy` sentinels when the optional
+// output is missing, hence the size guard (the .nii.gz pattern already rejects the .dummy name).
+function pickFullFov(anatFiles) {
+  const found = pick(anatFiles, [/_space-T1w_desc-conformFullFOV_T1w\.nii\.gz$/i])
+  if (!found) return null
+  try {
+    if (fs.statSync(found).size === 0) return null
+  } catch {
+    return null
+  }
+  return found
+}
+
+// brainana records how far the box was expanded in the sidecar. 'no_expansion_needed' and 'fallback'
+// mean the image is identical to the cropped one, which the UI explains rather than looking broken.
+// Informational only: an unreadable sidecar yields null and the volume is still offered.
+function fullFovStatus(niiPath) {
+  try {
+    const sidecar = niiPath.replace(/\.nii\.gz$/i, '.json')
+    const parsed = JSON.parse(fs.readFileSync(sidecar, 'utf8'))
+    const status = parsed?.FullFOVPadding?.status
+    return typeof status === 'string' ? status : null
+  } catch {
+    return null
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Flexible layout resolution (flat sub-*/anat OR sub-*/ses-*/anat)
 // ---------------------------------------------------------------------------
@@ -214,6 +243,7 @@ export function buildManifest({ outputRoot, subjectDir, fileUrl }) {
     /desc-preproc_brain\.nii\.gz$/i,
     /space-scanner_T1w\.nii\.gz$/i,
   ])
+  const fullFovNii = pickFullFov(anatFiles)
   const fsDir = resolveFsDir(outputRoot, subjectId, session)
   const surfDir = path.join(fsDir, 'surf')
   const derived = ensureDerivedAssets(outputRoot, subjectId, fsDir)
@@ -302,6 +332,11 @@ export function buildManifest({ outputRoot, subjectDir, fileUrl }) {
     relativePath: path.relative(outputRoot, subjectDir),
     anatomy: fileUrl(anatomy),
     volumes,
+    // Kept out of `volumes` on purpose: that list answers "which processed volume", while the fov
+    // switch answers "which extent". One state, one control.
+    fullFov: fullFovNii
+      ? { url: fileUrl(fullFovNii), label: 'T1w (full FOV)', status: fullFovStatus(fullFovNii) }
+      : null,
     // atlasList entries are already { name, label, volume, labels, surface } objects —
     // emit them directly; do NOT re-wrap in fileUrl (that would pass an object to path.relative).
     atlases: atlasList,

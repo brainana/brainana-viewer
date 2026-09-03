@@ -11,23 +11,29 @@ import { MultiView, MORPH_DEFAULT_COLORMAP, type SurfaceNode, type SurfacePairUr
 import { Marker } from '@brainana/niivue-kit/marker.ts'
 import { OrientationGizmo } from '@brainana/niivue-kit/orientation.ts'
 import { createViewerStore, type Layout } from '../state/store.ts'
+import { FOV_MODES, resolveFovMode, fovTooltip, loadFovPreference, saveFovPreference, type FovMode } from '../state/fovMode.ts'
 import { parseAtlasTsv, buildLabelColortable, type AtlasLabel } from '../data/atlas.ts'
 import { ARM_SEED } from '../data/colors.ts'
 import { finiteExtrema, createFunctionalSurfaceLut, quantizeFunctionalSurfaceValues, maskSurfaceBinsByF, maskSurfaceBinsByValue, type SurfaceFunctionMode } from '../data/functional.ts'
-import { visualXY, visualFieldStats, ECC_MAX, type VfPoint } from '../data/visualField.ts'
+import { visualFieldStats } from '../data/visualField.ts'
 import { parseGiftiFloat32 } from '../data/gifti.ts'
 import { RoiLegend } from './roiLegend.ts'
 import { createAtlasPanel, type AtlasPanel, type AtlasSelection } from './panels/atlas.ts'
 import { createFunctionPanel, choiceKey, type FunctionPanel, type FunctionChoice } from './panels/function.ts'
 import { createMorphologyPanel, type MorphologyPanel, type MarkerMode } from './panels/morphology.ts'
 import { drawVisualField } from './visualFieldPlot.ts'
-import { h, errorText, selectField } from '@brainana/ui/dom.ts'
+import { h, errorText, selectField, asyncHandler } from '@brainana/ui/dom.ts'
 import { createSlider } from '@brainana/ui/components/slider.ts'
 import { mountSourcesDialog } from './dialogs/sources.ts'
 import { buildColormapAssets, availableColormaps } from '../niivue/colormaps.ts'
 import { buildColormapRegistry, type ColormapInfo } from '../data/colormap.ts'
 import { surfaceLutFromColormap } from '../data/functional.ts'
 import { createColorDisplay, type ColorDisplay } from './components/colorDisplay.ts'
+import { collectAtlasRows, collectVertex, collectMorphology, collectRetinotopy, collectSomatotopy, collectVisualFieldPoints } from '../report/collect.ts'
+import { BookmarkStore } from '../report/bookmarks.ts'
+import { mountReportDialog } from '../report/dialog.ts'
+import type { LocationReadout, ViewState } from '../report/model.ts'
+import type { ReportContext } from '../report/generate.ts'
 
 const FALLBACK_GRADIENT = 'linear-gradient(90deg, rgb(20,18,13), rgb(236,230,216))'
 
@@ -181,6 +187,14 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
   const volCheck = h('input', { type: 'checkbox' }) as HTMLInputElement
   volCheck.checked = true
   const volSelect = h('select', { title: 'Base volume (FreeSurfer mri/)', class: 'narrow' })
+  // Field-of-view switch: 'full' swaps the underlay to the uncropped conform so a chamber or
+  // head-post outside the processing box becomes visible. Same segmented idiom as the view presets.
+  const fovBtns = FOV_MODES.map((m) => {
+    const b = h('button', { type: 'button', class: 'view-btn', title: m.title }, [m.label]) as HTMLButtonElement
+    b.dataset.fov = m.mode
+    return b
+  })
+  const fovGroup = h('div', { class: 'views fov-modes' }, fovBtns)
   const surfCheck = h('input', { type: 'checkbox' }) as HTMLInputElement
   surfCheck.checked = true
   const surfSelect = h('select', { title: 'Cortical surface' })
@@ -193,7 +207,10 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
     { class: 'sm' },
     ['0', '1', '2', '3'].map((n) => h('option', { value: n }, [n])),
   ) as HTMLSelectElement
-  neighborhoodSelect.value = '1'
+  // Single-voxel by default: a report quotes the value AT the crosshair, and averaging a 3x3x3 box
+  // in (docs/design_guideline/theme.html still shows that as the default) blurs sharp retinotopic
+  // gradients across an areal border. Widen it from the dropdown when a smoother estimate is wanted.
+  neighborhoodSelect.value = '0'
 
   const layoutBtns = LAYOUTS.map((l) => {
     const b = h('button', { type: 'button', class: 'layout-btn', title: l.title }, [l.icon])
@@ -201,6 +218,13 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
     return b
   })
   const panelBtns = PANEL_BUTTONS.map((name) => h('button', { type: 'button', class: 'panel-btn' }, [name]))
+  // Report controls: bookmark the current crosshair, and open the report dialog. Both stay disabled
+  // until a subject is loaded (there is nothing to sample or describe before that).
+  const addPointBtn = h('button', { type: 'button', class: 'ghost sm', title: 'Bookmark the current crosshair for the report' }, ['+ point']) as HTMLButtonElement
+  const pointCount = h('span', { class: 'badge point-count', title: 'Bookmarked points' }, ['0'])
+  const reportBtn = h('button', { type: 'button', class: 'ghost sm', title: 'Generate an HTML report' }, ['report']) as HTMLButtonElement
+  addPointBtn.disabled = true
+  reportBtn.disabled = true
   const viewBtns = VIEW_PRESETS.map((v) => {
     const b = h('button', { type: 'button', class: 'view-btn', title: `${v.label} view` }, [v.label])
     b.dataset.view = v.k
@@ -266,7 +290,10 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
     h('div', { class: 'tb-cell' }, [monkeySelect]),
     tbDivide(),
     // col 3: vol (row 1) · surf (row 2). LH/RH moved to col 4 row 1 (freed by the underlay rail).
-    h('div', { class: 'tb-cell' }, [h('label', { class: 'tb-field inline' }, [volCheck, h('span', {}, ['vol']), volSelect])]),
+    h('div', { class: 'tb-cell' }, [
+      h('label', { class: 'tb-field inline' }, [volCheck, h('span', {}, ['vol']), volSelect]),
+      h('label', { class: 'tb-field inline' }, [h('span', {}, ['FOV']), fovGroup]),
+    ]),
     h('div', { class: 'tb-cell' }, [
       h('label', { class: 'tb-field inline' }, [surfCheck, h('span', {}, ['surf']), surfSelect]),
     ]),
@@ -288,9 +315,9 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
       markerModeSel.element,
     ]),
     tbDivide(),
-    // col 5: category tabs (row 1); row 2 reserved for future Import/Export controls.
+    // col 5: category tabs (row 1); report controls (row 2).
     h('div', { class: 'tb-cell panels' }, panelBtns),
-    h('div', { class: 'tb-cell' }, []),
+    h('div', { class: 'tb-cell report-controls' }, [addPointBtn, pointCount, reportBtn]),
   ])
 
   // --- main grid ---
@@ -734,7 +761,12 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
   const paneState = (): { vol: boolean; surf: boolean } => {
     let vol = volCheck.checked
     let surf = surfCheck.checked
-    if (!vol && !surf) lastUnchecked === 'vol' ? (vol = true) : (surf = true)
+    // Both panes off is not a state the layout can render, so the one unchecked LEAST recently
+    // comes back on.
+    if (!vol && !surf) {
+      if (lastUnchecked === 'vol') vol = true
+      else surf = true
+    }
     return { vol, surf }
   }
   // Hide the unchecked pane's grid track and resize the remaining panel(s) to fill.
@@ -875,7 +907,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
         const tsv = await (await client.apiFetch(entry.labels)).text()
         parsed = parseAtlasTsv(tsv)
       }
-      await view.loadAtlasOverlay(entry.volume, atlasOpacity)
+      await view.loadAtlasOverlay(entry.volume, atlasOpacity, entry.name)
       if (token !== atlasToken) return // a newer selection superseded this one
       atlasHidden = new Set()
       atlasSurfacePair = entry.surface ?? null
@@ -936,18 +968,89 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
     view?.setVolumeOpacity(paneState().vol ? 1 : 0)
     applyPaneVisibility()
   })
-  volSelect.addEventListener('change', async () => {
-    if (!view || !manifest) return
-    const vol = manifest.volumes[Number(volSelect.value)]
-    if (!vol) return
-    try {
-      await view.setBaseVolume(vol.url, paneState().vol ? 1 : 0)
-      syncVolumeControls() // re-seed the underlay rail for the switched volume's intensity range
-      store.set('volumeKey', vol.key)
-    } catch {
-      // volume switch failure is non-fatal — the previous base volume stays loaded
+  // --- field of view -----------------------------------------------------------------------
+  // fovPref is what the user chose (sticky, app-wide); fovMode is what is actually on screen. They
+  // diverge on a subject with no full-FOV volume: the display degrades to 'best' while the
+  // preference survives, so the next subject that has one comes up in full FOV again.
+  let fovPref: FovMode = loadFovPreference()
+  let fovMode: FovMode = 'best'
+
+  const hasFullFov = (): boolean => manifest?.fullFov != null
+
+  // Reflect mode + availability on the buttons. In 'full' the volume dropdown is disabled rather
+  // than rewritten: the full-FOV conform is the only volume that exists at that extent, and leaving
+  // volSelect's value intact is what lets 'best' restore the previous choice with no saved index.
+  const syncFovControls = (): void => {
+    const available = hasFullFov()
+    const tip = fovTooltip(manifest?.fullFov ?? null)
+    for (const b of fovBtns) {
+      const mode = b.dataset.fov as FovMode
+      b.classList.toggle('active', mode === fovMode)
+      b.disabled = mode === 'full' && !available
+      b.title = mode === 'full' ? tip : (FOV_MODES.find((m) => m.mode === mode)?.title ?? '')
     }
-  })
+    volSelect.disabled = fovMode === 'full'
+    volSelect.title =
+      fovMode === 'full'
+        ? 'Switch FOV back to best to choose a base volume — full FOV has only the uncropped conform.'
+        : 'Base volume (FreeSurfer mri/)'
+  }
+
+  // The underlay url for a mode: the full-FOV conform, or whatever the dropdown currently names.
+  const baseUrlFor = (mode: FovMode): string | null => {
+    if (!manifest) return null
+    if (mode === 'full') return manifest.fullFov?.url ?? null
+    return manifest.volumes[Number(volSelect.value)]?.url ?? null
+  }
+
+  // Load the underlay for `mode`. Only the user's own click reaches this — a subject load applies the
+  // preference inline instead — so the choice is always recorded. A failed load leaves the previous
+  // underlay and displayed mode untouched; the recorded preference still reflects what was asked for.
+  const applyFovMode = async (mode: FovMode): Promise<void> => {
+    if (!view || !manifest) return
+    fovPref = mode
+    saveFovPreference(mode)
+    const effective = resolveFovMode(mode, hasFullFov())
+    const url = baseUrlFor(effective)
+    if (!url) return
+    try {
+      // The full-FOV image is the conform stage, not the preproc one, so its intensity range differs;
+      // syncVolumeControls() re-seeds the display window from the new volume rather than carrying the
+      // old one over. Skipped when a newer load superseded this one.
+      if (await view.setBaseVolume(url, paneState().vol ? 1 : 0)) syncVolumeControls()
+      fovMode = effective
+      syncFovControls()
+    } catch {
+      // fov switch failure is non-fatal — the previous base volume and mode stay in place
+    }
+  }
+
+  for (const b of fovBtns) {
+    b.addEventListener('click', () => {
+      const mode = b.dataset.fov as FovMode
+      if (mode === fovMode) return
+      void applyFovMode(mode)
+    })
+  }
+  syncFovControls() // welcome screen: 'best' reads as active and 'full' as unavailable until a subject loads
+
+  volSelect.addEventListener(
+    'change',
+    asyncHandler(async () => {
+      if (!view || !manifest) return
+      const vol = manifest.volumes[Number(volSelect.value)]
+      if (!vol) return
+      try {
+        // Only reachable in 'best' — the dropdown is disabled in 'full'.
+        if (await view.setBaseVolume(vol.url, paneState().vol ? 1 : 0)) {
+          syncVolumeControls() // re-seed the underlay rail for the switched volume's intensity range
+        }
+        store.set('volumeKey', vol.key)
+      } catch {
+        // volume switch failure is non-fatal — the previous base volume stays loaded
+      }
+    }),
+  )
   surfSelect.addEventListener('change', () => {
     store.set('surfaceKind', surfSelect.value)
     void (async () => {
@@ -1083,6 +1186,9 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
 
   const num = (v: number, unit = ''): string => (Number.isFinite(v) ? `${v.toFixed(2)}${unit}` : '—')
 
+  // Neighborhood radius (voxels) for the retinotopy sweep, shared by the plot and the readout.
+  const neighborhood = (): number => Number(neighborhoodSelect.value)
+
   const updateFunctionReport = (): void => {
     const el = document.getElementById('report-function')
     if (!el || !view || !manifest) return
@@ -1095,28 +1201,26 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
     const f = map.frames
     el.innerHTML = ''
     if (funcChoice.kind === 'retinotopy') {
-      const polar = view.sampleFunctionFrame(vox, f.polar)
-      const ecc = view.sampleFunctionFrame(vox, f.eccentricity)
-      const [vx, vy] = visualXY(polar, ecc)
-      // Single dl keeps every label:value pair aligned; the last three ids are filled by
+      // The neighborhood counts are filled in by updateVisualField (which sweeps the same voxels to
+      // draw the plot), so this pass skips that sweep rather than paying for it twice per move.
+      const r = collectRetinotopy(view, f, neighborhood(), funcThreshold, false)
+      if (!r) return
+      // Single dl keeps every label:value pair aligned; the last two dds are filled by
       // updateVisualField from the sampled neighborhood (kept in sync via the crosshair order).
       const dl = h('dl', { class: 'dl-paired' })
       const rowPaired = (label1: string, val1: string, label2: string, val2: string): void => {
         dl.append(h('dt', {}, [label1]), h('dd', {}, [val1]), h('dt', {}, [label2]), h('dd', {}, [val2]))
       }
-      rowPaired('polar angle (rad)', num(polar), 'F', num(view.sampleFunctionFrame(vox, f.polarF)))
-      rowPaired('eccentricity (°)', num(ecc), 'F', num(view.sampleFunctionFrame(vox, f.eccentricityF)))
-      rowPaired('visual X (°)', num(vx), 'visual Y (°)', num(vy))
+      rowPaired('polar angle (rad)', num(r.polar), 'F', num(r.polarF))
+      rowPaired('eccentricity (°)', num(r.eccentricity), 'F', num(r.eccentricityF))
+      rowPaired('visual X (°)', num(r.visualX), 'visual Y (°)', num(r.visualY))
       dl.append(h('dt', {}, ['valid voxels']), h('dd', { id: 'func-valid' }, ['—']), h('dt', {}, ['local spread (°)']), h('dd', { id: 'func-spread' }, ['—']))
       el.append(dl)
     } else {
+      const som = collectSomatotopy(view, f)
+      if (!som) return
       const dl = h('dl', { class: 'dl-paired' })
-      dl.append(
-        h('dt', {}, ['body position']),
-        h('dd', {}, [num(view.sampleFunctionFrame(vox, f.phase))]),
-        h('dt', {}, ['F']),
-        h('dd', {}, [num(view.sampleFunctionFrame(vox, f.fstat))]),
-      )
+      dl.append(h('dt', {}, ['body position']), h('dd', {}, [num(som.bodyPosition)]), h('dt', {}, ['F']), h('dd', {}, [num(som.fStat)]))
       el.append(dl)
     }
   }
@@ -1134,23 +1238,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
     const dims = view.functionDims()
     const f = manifest.function.retinotopy!.frames
     if (!vox || !dims) return
-    const s = Number(neighborhoodSelect.value)
-    const points: VfPoint[] = []
-    let possible = 0 // in-bounds neighborhood voxels considered (denominator of "valid voxels")
-    for (let dx = -s; dx <= s; dx++)
-      for (let dy = -s; dy <= s; dy++)
-        for (let dz = -s; dz <= s; dz++) {
-          const v: [number, number, number] = [vox[0] + dx, vox[1] + dy, vox[2] + dz]
-          if (v[0] < 0 || v[1] < 0 || v[2] < 0 || v[0] >= dims[0] || v[1] >= dims[1] || v[2] >= dims[2]) continue
-          possible++
-          const polar = view.sampleFunctionFrame(v, f.polar)
-          const polarF = view.sampleFunctionFrame(v, f.polarF)
-          const ecc = view.sampleFunctionFrame(v, f.eccentricity)
-          const eccF = view.sampleFunctionFrame(v, f.eccentricityF)
-          if (!(ecc >= 0 && ecc <= ECC_MAX && polarF >= funcThreshold && eccF >= funcThreshold)) continue
-          const [x, y] = visualXY(polar, ecc)
-          points.push({ x, y, polar, ecc, center: dx === 0 && dy === 0 && dz === 0 })
-        }
+    const { points, possible } = collectVisualFieldPoints(view, f, vox, dims, neighborhood(), funcThreshold)
     const stats = visualFieldStats(points)
     drawVisualField(canvas, points, stats)
     // Mirror the neighborhood stats into the Function column (dds built by updateFunctionReport).
@@ -1513,19 +1601,14 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
       el.textContent = '—'
       return
     }
-    const node = currentNode
-    const refV = view.referenceVertexWorld(node)
-    const dist = refV && lastMm ? Math.hypot(refV[0] - lastMm[0], refV[1] - lastMm[1], refV[2] - lastMm[2]) : NaN
-    const sample = (key: 'curvature' | 'sulc' | 'thickness'): number => {
-      const a = morphShape[key]?.[node.hemi]
-      return a && node.index < a.length ? a[node.index] : NaN
-    }
+    const vertex = collectVertex(view, currentNode, lastMm)
+    const morph = collectMorphology(morphShape, currentNode)
     const rows: Array<[string, string]> = [
-      ['nearest vertex', String(node.index)],
-      ['distance (mm)', Number.isFinite(dist) ? dist.toFixed(2) : '—'],
-      ['curvature', num(sample('curvature'))],
-      ['sulcal depth', num(sample('sulc'))],
-      ['thickness (mm)', num(sample('thickness'))],
+      ['nearest vertex', vertex ? String(vertex.index) : '—'],
+      ['distance (mm)', vertex?.distanceMm != null ? vertex.distanceMm.toFixed(2) : '—'],
+      ['curvature', num(morph?.curvature ?? NaN)],
+      ['sulcal depth', num(morph?.sulc ?? NaN)],
+      ['thickness (mm)', num(morph?.thickness ?? NaN)],
     ]
     el.innerHTML = ''
     el.append(dlRows(rows))
@@ -1590,33 +1673,19 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
       return
     }
     el.innerHTML = ''
-    // Continuous float atlas (e.g. CortHierarchy): show the raw value, no id/label lookup. 0 and
-    // non-finite are background → blank. Float-vs-int is an atlas-level property, so always show
-    // fixed decimals — a whole value reads as 1.000, never a bare 1 (which looks like a label id).
-    const fmtValue = (v: number): string => (Number.isFinite(v) && v !== 0 ? v.toFixed(3) : '')
-    for (const spec of reportSpecs) {
-      const raw = view.sampleReportVolume(spec.key)
-      if (view.reportVolumeContinuous(spec.key)) {
-        el.append(
-          h('div', { class: 'atlas-report-row' }, [
-            h('span', { class: 'atlas-report-name' }, [spec.label]),
-            h('span', { class: 'atlas-report-id' }, [raw != null ? fmtValue(raw) : '']),
-            h('span', { class: 'atlas-report-label' }, ['']),
-          ]),
-        )
-        continue
-      }
-      const id = raw != null ? Math.round(raw) : null
-      const label = id != null && id !== 0 ? spec.byId.get(id) : null
-      const isUnknown = !label && id != null && id !== 0 // id present but no region name resolves
-      const name = label ? label.name.replace(/_/g, ' ') : isUnknown ? '(unlabeled)' : ''
-      const short = label?.nameShort ? label.nameShort.replace(/_/g, ' ') : ''
+    // Sampling lives in report/collect.ts so the HTML report reads the same numbers this panel
+    // shows. Rendering rules stay here: a continuous float atlas (e.g. CortHierarchy) prints its
+    // value with fixed decimals — a whole value must read as 1.000, never a bare 1, which would
+    // look like a label id — and has no region name; a parcellation prints id + short · name.
+    for (const row of collectAtlasRows(view, reportSpecs)) {
+      const idText = row.continuous ? (row.value != null ? row.value.toFixed(3) : '') : row.id != null ? String(row.id) : ''
+      const name = row.region ?? (row.unknown ? '(unlabeled)' : '')
       el.append(
         h('div', { class: 'atlas-report-row' }, [
-          h('span', { class: 'atlas-report-name' }, [spec.label]),
-          h('span', { class: 'atlas-report-id' }, [id != null && id !== 0 ? String(id) : '']),
-          h('span', { class: `atlas-report-label${isUnknown ? ' unknown' : ''}` }, [
-            ...(short ? [h('span', { class: 'atlas-report-short' }, [short]), ' · '] : []),
+          h('span', { class: 'atlas-report-name' }, [row.label]),
+          h('span', { class: 'atlas-report-id' }, [idText]),
+          h('span', { class: `atlas-report-label${row.unknown ? ' unknown' : ''}` }, [
+            ...(row.shortName ? [h('span', { class: 'atlas-report-short' }, [row.shortName]), ' · '] : []),
             name,
           ]),
         ]),
@@ -1627,39 +1696,40 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
   // Overlay-value probe for the Coordinates section: the value of the currently overlaid map at the
   // crosshair. Follows the docked tab via colorTarget() and reuses the same per-kind samplers the
   // dedicated info sections already run each crosshair move (no extra sampling infrastructure).
-  const updateOverlayValue = (): void => {
-    if (!view) {
-      coordEditor.setOverlay(null)
-      return
-    }
+  // Returns the probe as structured data so the report can carry the same value the Coordinates
+  // panel shows, along with which overlay it came from.
+  const overlayReadout = (): LocationReadout['overlay'] => {
+    if (!view) return null
     const target = colorTarget()
     if (target === 'atlas' && lastAtlasSel) {
       const name = lastAtlasSel.name
       const raw = view.sampleReportVolume(name)
-      if (raw == null) {
-        coordEditor.setOverlay(null)
-      } else if (view.reportVolumeContinuous(name)) {
-        coordEditor.setOverlay(raw !== 0 ? raw.toFixed(3) : null) // float atlas: fixed decimals
-      } else {
-        const id = Math.round(raw)
-        coordEditor.setOverlay(id !== 0 ? String(id) : null) // parcellation: numeric id only
-      }
-      return
+      if (raw == null) return null
+      const value = view.reportVolumeContinuous(name)
+        ? raw !== 0
+          ? raw.toFixed(3) // float atlas: fixed decimals
+          : null
+        : Math.round(raw) !== 0
+          ? String(Math.round(raw)) // parcellation: numeric id only
+          : null
+      return { target: 'atlas', label: name, value }
     }
     if (target === 'function' && funcChoice) {
       const vox = view.functionCrosshairVox()
       const v = vox ? view.sampleFunctionFrame(vox, funcChoice.mode.valueFrame) : NaN
-      coordEditor.setOverlay(num(v))
-      return
+      return { target: 'function', label: funcChoice.mode.label, value: num(v) }
     }
     if (target === 'morphology' && currentNode) {
       const metric = morphActiveMetric()
       const a = morphShape[metric]?.[currentNode.hemi]
       const v = a && currentNode.index < a.length ? a[currentNode.index] : NaN
-      coordEditor.setOverlay(num(v))
-      return
+      return { target: 'morphology', label: metric, value: num(v) }
     }
-    coordEditor.setOverlay(null) // nothing overlaid on the docked tab
+    return null // nothing overlaid on the docked tab
+  }
+
+  const updateOverlayValue = (): void => {
+    coordEditor.setOverlay(overlayReadout()?.value ?? null)
   }
 
   const loadReportSpecs = (m: Manifest): void => {
@@ -1685,6 +1755,163 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
       }
     }
   }
+
+  // --- report: bookmarked points + HTML report generation ---
+  const bookmarks = new BookmarkStore()
+  // Build id lives server-side (it encodes the git describe of the running build), so fetch it once
+  // and let the report fall back to "version only" if the call fails.
+  let buildId: string | null = null
+  void client
+    .version()
+    .then((info) => {
+      buildId = info.buildId
+    })
+    .catch(() => {})
+
+  // A one-line description of what is overlaid, recorded with each bookmark so a reader can tell
+  // why (say) retinotopy values are present on one point and absent on another.
+  const overlayDescription = (): string => {
+    const parts: string[] = []
+    if (lastAtlasSel) parts.push(`atlas · ${lastAtlasSel.name}`)
+    if (funcChoice) parts.push(`${funcChoice.kind} · ${funcChoice.mode.label}`)
+    if (morphMetric !== 'none') parts.push(`morphology · ${morphMetric}`)
+    return parts.length ? parts.join(' + ') : 'none'
+  }
+
+  // The crosshair as a full readout — the same collectors the info panel renders from, plus the
+  // sections the panel has no room for. Null until a subject is loaded and the crosshair has moved.
+  const currentReadout = (): LocationReadout | null => {
+    if (!view || !manifest || !lastMm) return null
+    const kind = funcChoice?.kind ?? null
+    const map = kind === 'retinotopy' ? manifest.function.retinotopy : kind === 'somatotopy' ? manifest.function.somatotopy : null
+    return {
+      mm: lastMm,
+      voxel: view.baseVox(lastMm),
+      hemisphere: currentNode ? (currentNode.hemi === 0 ? 'left' : 'right') : '—',
+      vertex: collectVertex(view, currentNode, lastMm),
+      atlases: collectAtlasRows(view, reportSpecs),
+      morphology: collectMorphology(morphShape, currentNode),
+      retinotopy: kind === 'retinotopy' && map ? collectRetinotopy(view, map.frames, neighborhood(), funcThreshold) : null,
+      somatotopy: kind === 'somatotopy' && map ? collectSomatotopy(view, map.frames) : null,
+      overlay: overlayReadout(),
+    }
+  }
+
+  const viewState = (): ViewState => {
+    const baseVol = manifest?.volumes[Number(volSelect.value)] ?? null
+    return {
+      layout: store.get('layout'),
+      surfaceKind: surfSelect.value || null,
+      panes: { volume: paneState().vol, surface: paneState().surf },
+      hemispheres: { left: lhCheck.checked, right: rhCheck.checked },
+      baseVolume: {
+        key: baseVol?.key ?? null,
+        label: baseVol?.label ?? null,
+        window: { min: volCalLo, max: volCalHi },
+        clip: { lo: volClipLo, hi: volClipHi },
+      },
+      atlas: lastAtlasSel
+        ? {
+            name: lastAtlasSel.name,
+            colormap: atlasColormap ?? LABELS_KEY,
+            opacity: atlasOpacity,
+            continuous: atlasContinuous,
+            // The display window only means something for a continuous colormap; in labels mode the
+            // colors come from the ROI table, so reporting a range would be misleading.
+            displayRange: atlasColormap ? { min: atlasDisplayMin, max: atlasDisplayMax } : null,
+            clip: { lo: atlasClipLo, hi: atlasClipHi },
+            hiddenRois: atlasHidden.size,
+          }
+        : null,
+      morphology: {
+        metric: morphMetric,
+        curvatureStyle: morphStyle,
+        // Binary curvature has a fixed 2-tone LUT that the colormap picker does not drive.
+        colormap: morphColorable() ? (morphColormaps[morphActiveMetric()] ?? null) : null,
+        range: morphColorable() ? morphRanges[morphActiveMetric()] : null,
+        clip: morphColorable() ? morphClip[morphActiveMetric()] : null,
+      },
+      function: funcChoice
+        ? {
+            kind: funcChoice.kind,
+            mode: funcChoice.mode.label,
+            threshold: funcThreshold,
+            opacity: funcOpacity,
+            brightness: funcBrightness,
+            colormap: funcColormapKey(),
+            // Retinotopy is cyclic with a fixed domain and exposes no display range (see the panel).
+            displayRange: funcChoice.kind === 'retinotopy' ? null : { min: funcCalMin, max: funcCalMax },
+            clip: { lo: funcClipLo, hi: funcClipHi },
+          }
+        : null,
+      camera: view?.getCamera() ?? null,
+      markerMode,
+    }
+  }
+
+  const reportContext = (): ReportContext => {
+    return {
+      apiFetch: (path) => client.apiFetch(path),
+      app: { name: 'brainana-viewer', version: __APP_VERSION__, buildId },
+      dataset: () => {
+        // Resolved on each call: the dialog stays open across a monkey switch, and a report must
+        // describe the subject it was generated from, not the one that was loaded when it opened.
+        const current = store.get('sourceId')
+        const entry = sources.list().find((s) => s.id === current) ?? null
+        return {
+          sourceId: current,
+          sourceLabel: entry ? (entry.customLabel ?? entry.label) : null,
+          sourceType: entry?.type ?? null,
+          sourceRoot: entry?.root ?? null,
+          subjectId: manifest?.id ?? null,
+          subjectLabel: manifest?.label ?? null,
+          session: manifest?.session ?? null,
+          relativePath: manifest?.relativePath ?? null,
+        }
+      },
+      loadedAssets: () => view?.loadedAssets() ?? [],
+      currentReadout,
+      viewState,
+      // A hidden pane has a zero-sized canvas; passing its visibility lets the report say the pane
+      // was hidden rather than reporting a failed capture.
+      panes: () => ({
+        slices: { scene: view!.slices, canvas: slicesCanvas, visible: paneState().vol },
+        surface: { scene: view!.render, canvas: surfaceCanvas, visible: paneState().surf },
+      }),
+      crosshair: () => lastCrosshairMm,
+      moveCrosshair: (mm) => view?.moveCrosshairToWorld(mm),
+    }
+  }
+
+  const syncReportControls = (): void => {
+    const ready = Boolean(view && manifest)
+    // A point can only be bookmarked once the crosshair has a position — on a fresh load NiiVue
+    // emits nothing until the first interaction, and an enabled button that silently did nothing
+    // would read as broken.
+    addPointBtn.disabled = !ready || !lastMm
+    reportBtn.disabled = !ready
+    pointCount.textContent = String(bookmarks.count())
+  }
+  bookmarks.subscribe(syncReportControls)
+
+  addPointBtn.addEventListener('click', () => {
+    const readout = currentReadout()
+    if (!readout) return
+    bookmarks.add({ readout, activeOverlay: overlayDescription() })
+  })
+
+  reportBtn.addEventListener('click', () => {
+    if (!view || !manifest) return
+    const sourceId = store.get('sourceId')
+    const source = sources.list().find((entry) => entry.id === sourceId) ?? null
+    mountReportDialog({
+      client,
+      context: reportContext(),
+      bookmarks,
+      sourceId,
+      sourceLabel: source ? (source.customLabel ?? source.label) : null,
+    })
+  })
 
   // --- subject loading ---
   // Snapshot of the current view, captured before a monkey switch so the incoming subject restores
@@ -1759,6 +1986,11 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
         : null
     try {
       manifest = (await files.getManifest(sourceId, subjectId)) as unknown as Manifest
+      // Bookmarked points are coordinates in THIS subject's space; carrying them across a switch
+      // would silently relabel them as points in the incoming subject. Cleared only once the
+      // manifest is in hand: a failed fetch leaves the previous subject on screen, and its points
+      // must survive with it.
+      bookmarks.clear()
       store.update({ sourceId, subjectId })
 
       // vol dropdown
@@ -1823,18 +2055,31 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
           }
           const ijk = view!.baseVox(info.mm)
           const hemiNode = node ?? currentNode
-          coordEditor.update(info.mm, ijk, hemiNode ? (hemiNode.hemi === 0 ? 'left' : 'right') : '—')
+          coordEditor.update(info.mm, ijk, hemiNode ? (hemiNode.hemi === 0 ? 'L' : 'R') : '—')
           updateAnatomyReport()
           updateFunctionReport()
           updateVisualField()
           updateSurfaceReport()
           updateOverlayValue()
+          // Cheap no-op once enabled; this is what un-gates "+ point" on the first crosshair move.
+          if (addPointBtn.disabled) syncReportControls()
         })
       }
 
+      // Apply the sticky fov preference to the incoming subject. It degrades to 'best' when this
+      // dataset has no full-FOV volume, without clearing the preference, so a later subject that
+      // does have one comes up in full FOV again.
+      fovMode = resolveFovMode(fovPref, manifest.fullFov != null)
       const baseVol = manifest.volumes[volIdx]
-      if (baseVol) await view.setBaseVolume(baseVol.url, 1)
-      syncVolumeControls() // seed the underlay rail (window/clip/zoom) from the loaded volume
+      const baseUrl = fovMode === 'full' ? manifest.fullFov?.url : baseVol?.url
+      // Honour setBaseVolume's latest-wins result here as the other two call sites do. Switching
+      // subjects while one is still loading makes this load the LOSER, and re-seeding the underlay
+      // rail from a volume that was never applied would set the window/clip for the wrong image.
+      // A subject with NO volume still syncs, because that call is also what hides the rail —
+      // skipping it would leave the previous subject's rail on screen.
+      const superseded = baseUrl ? !(await view.setBaseVolume(baseUrl, 1)) : false
+      if (!superseded) syncVolumeControls() // seed the underlay rail (window/clip/zoom), or hide it
+      syncFovControls() // reflect availability + mode for this subject on the fov switch
       // Reference surface for node lookup (pial in world space; fall back to white).
       await view.setReference(manifest.surfaces.pial ?? manifest.surfaces.white)
       if (surfDefault) await applySurface(surfDefault)
@@ -1952,6 +2197,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
       }
 
       main.classList.add('monkey-loaded')
+      syncReportControls()
       hideLoading()
     } catch (err) {
       showError(errorText(err))

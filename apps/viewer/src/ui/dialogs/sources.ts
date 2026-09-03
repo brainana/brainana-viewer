@@ -2,19 +2,16 @@
 // sources. Multi-source is held server-side; this just drives /api/sources.
 import type { RuntimeClient } from '@brainana/core-client/runtimeClient.ts'
 import type { SourceManager, SourceSummary } from '@brainana/core-client/sourceManager.ts'
-import type { BrowseListing, FilesystemClient, SshHost } from '@brainana/core-client/filesystemClient.ts'
+import type { FilesystemClient, SshHost } from '@brainana/core-client/filesystemClient.ts'
 import { loadRecent, rememberLocal, loadProfiles, rememberProfile, forgetProfile } from '@brainana/core-client/sessionPersistence.ts'
-import { h, field, errorText } from '@brainana/ui/dom.ts'
+import { h, field, errorText, asyncHandler } from '@brainana/ui/dom.ts'
+import { openFsPicker, FOLDER_SVG } from './fsPicker.ts'
 
 interface Deps {
   client: RuntimeClient
   sources: SourceManager
   files: FilesystemClient
 }
-
-// Folder glyph reused by the Browse buttons and by each folder row in the picker (no shared icon set).
-const FOLDER_SVG =
-  '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>'
 
 // Dataset-table column widths (px) for the fixed-layout resizable columns. Held at module scope so
 // drags survive the table rebuilds fired on every registry change, and persist across reopens of
@@ -133,7 +130,13 @@ export function mountSourcesDialog(deps: Deps, onChanged: () => void, onDone?: (
         })
       })
       const remove = h('button', { type: 'button', class: 'ghost sm' }, ['remove'])
-      remove.addEventListener('click', () => sources.remove(s.id).then(onChanged).catch(() => {}))
+      remove.addEventListener(
+        'click',
+        asyncHandler(async () => {
+          await sources.remove(s.id)
+          onChanged()
+        }),
+      )
       body.append(
         h('tr', {}, [
           h('td', {}, [h('span', { class: `badge ${s.type}` }, [s.type])]),
@@ -184,24 +187,27 @@ export function mountSourcesDialog(deps: Deps, onChanged: () => void, onDone?: (
   })
   const localBtn = h('button', { type: 'button', class: 'primary' }, ['add'])
   const localMsg = h('span', { class: 'msg' })
-  localBtn.addEventListener('click', async () => {
-    if (!localPath.value.trim()) return
-    localBtn.disabled = true
-    localMsg.textContent = ''
-    try {
-      const spec = { type: 'local' as const, path: localPath.value.trim() }
-      await sources.add(spec)
-      rememberLocal(spec)
-      localMsg.textContent = '✓ added'
-      localMsg.className = 'msg ok'
-      onChanged()
-    } catch (err) {
-      localMsg.textContent = errorText(err)
-      localMsg.className = 'msg error'
-    } finally {
-      localBtn.disabled = false
-    }
-  })
+  localBtn.addEventListener(
+    'click',
+    asyncHandler(async () => {
+      if (!localPath.value.trim()) return
+      localBtn.disabled = true
+      localMsg.textContent = ''
+      try {
+        const spec = { type: 'local' as const, path: localPath.value.trim() }
+        await sources.add(spec)
+        rememberLocal(spec)
+        localMsg.textContent = '✓ added'
+        localMsg.className = 'msg ok'
+        onChanged()
+      } catch (err) {
+        localMsg.textContent = errorText(err)
+        localMsg.className = 'msg error'
+      } finally {
+        localBtn.disabled = false
+      }
+    }),
+  )
 
   // remote form
   const rHost = h('input', { type: 'text', placeholder: 'host' }) as HTMLInputElement
@@ -321,7 +327,7 @@ export function mountSourcesDialog(deps: Deps, onChanged: () => void, onDone?: (
   })
   const remotePath = h('input', { type: 'text', placeholder: '/remote/path/to/dataset', class: 'grow' }) as HTMLInputElement
   const remoteAddBtn = h('button', { type: 'button', class: 'primary' }, ['add'])
-  const remoteAddRow = h('div', { class: 'row' }, [remoteBrowseBtn, remotePath, remoteAddBtn])
+  const remoteAddRow = h('div', { class: 'row' }, [remotePath, remoteBrowseBtn, remoteAddBtn])
   // Add/validation status sits directly under the add row it refers to (not up in the connect row).
   const remoteAddMsg = h('span', { class: 'msg' })
 
@@ -368,40 +374,46 @@ export function mountSourcesDialog(deps: Deps, onChanged: () => void, onDone?: (
       },
     })
   })
-  remoteAddBtn.addEventListener('click', async () => {
-    const root = remotePath.value.trim()
-    if (!root || !remoteToken) return
-    remoteAddBtn.disabled = true
-    await addRemote(root)
-    remoteAddBtn.disabled = false
-  })
+  remoteAddBtn.addEventListener(
+    'click',
+    asyncHandler(async () => {
+      const root = remotePath.value.trim()
+      if (!root || !remoteToken) return
+      remoteAddBtn.disabled = true
+      await addRemote(root)
+      remoteAddBtn.disabled = false
+    }),
+  )
 
-  connectBtn.addEventListener('click', async () => {
-    if (!rHost.value.trim() || !rUser.value.trim()) return
-    connectBtn.disabled = true
-    remoteMsg.textContent = 'connecting…'
-    remoteMsg.className = 'msg'
-    try {
-      const connection = buildConnection()
-      const { token } = await files.connectRemote(connection)
-      remoteToken = token
-      // Remember the connection (no path, no password) as soon as it succeeds, and surface it.
-      rememberProfile({ host: connection.host, port: connection.port, username: connection.username })
-      renderRecall()
-      remoteMsg.textContent = ''
+  connectBtn.addEventListener(
+    'click',
+    asyncHandler(async () => {
+      if (!rHost.value.trim() || !rUser.value.trim()) return
+      connectBtn.disabled = true
+      remoteMsg.textContent = 'connecting…'
       remoteMsg.className = 'msg'
-      remoteAddMsg.textContent = ''
-      remoteAddMsg.className = 'msg'
-      connBanner.textContent = `connected to ${connection.username}@${connection.host}`
-      setConnected(true)
-      remotePath.focus()
-    } catch (err) {
-      remoteMsg.textContent = errorText(err)
-      remoteMsg.className = 'msg error'
-    } finally {
-      connectBtn.disabled = false
-    }
-  })
+      try {
+        const connection = buildConnection()
+        const { token } = await files.connectRemote(connection)
+        remoteToken = token
+        // Remember the connection (no path, no password) as soon as it succeeds, and surface it.
+        rememberProfile({ host: connection.host, port: connection.port, username: connection.username })
+        renderRecall()
+        remoteMsg.textContent = ''
+        remoteMsg.className = 'msg'
+        remoteAddMsg.textContent = ''
+        remoteAddMsg.className = 'msg'
+        connBanner.textContent = `connected to ${connection.username}@${connection.host}`
+        setConnected(true)
+        remotePath.focus()
+      } catch (err) {
+        remoteMsg.textContent = errorText(err)
+        remoteMsg.className = 'msg error'
+      } finally {
+        connectBtn.disabled = false
+      }
+    }),
+  )
   disconnectBtn.addEventListener('click', () => {
     teardownRemote()
     rPass.value = ''
@@ -424,7 +436,7 @@ export function mountSourcesDialog(deps: Deps, onChanged: () => void, onDone?: (
     h('div', { class: 'source-forms' }, [
       h('div', { class: 'source-form' }, [
         h('h3', {}, ['local dataset']),
-        h('div', { class: 'row' }, [browseBtn, localPath, localBtn]),
+        h('div', { class: 'row' }, [localPath, browseBtn, localBtn]),
         localMsg,
       ]),
       h('div', { class: 'source-form' }, [
@@ -448,105 +460,3 @@ export function mountSourcesDialog(deps: Deps, onChanged: () => void, onDone?: (
   document.body.append(overlay)
 }
 
-interface FsPickerOptions {
-  title: string
-  start: string
-  // Directory lister — local (browseFs) or remote (browseRemote with a session token) — returning
-  // the shared BrowseListing shape. Empty path lets the backend default to its home directory.
-  browse: (path: string) => Promise<BrowseListing>
-  onPick: (absPath: string) => void
-  onClose?: () => void
-}
-
-// An overlay layered over the Sources dialog: navigate directories (local or remote) and pick one.
-// Seeds from `start` when valid; otherwise the backend falls back to home. `onPick` gets the chosen
-// absolute path; `onClose` fires exactly once when the picker is dismissed (used to free a remote
-// browse connection).
-function openFsPicker({ title, start, browse, onPick, onClose }: FsPickerOptions): void {
-  const overlay = h('div', { class: 'overlay' })
-  let closed = false
-  const close = (): void => {
-    if (closed) return
-    closed = true
-    overlay.remove()
-    onClose?.()
-  }
-  overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) close()
-  })
-
-  let current = ''
-  const crumb = h('nav', { class: 'fs-crumb', ariaLabel: 'Current path' })
-  const listEl = h('div', { class: 'fs-list' })
-  const msg = h('span', { class: 'msg' })
-  const useBtn = h('button', { type: 'button', class: 'primary' }, ['use this folder'])
-  useBtn.addEventListener('click', () => {
-    if (current) onPick(current)
-    close()
-  })
-
-  // Render the absolute path as clickable ancestor segments (standard file-chooser breadcrumb).
-  // Each segment except the last navigates to that ancestor; the last marks the current folder.
-  const renderCrumb = (absPath: string): void => {
-    crumb.innerHTML = ''
-    const segs: Array<{ label: string; path: string }> = [{ label: '/', path: '/' }]
-    let acc = ''
-    for (const part of absPath.split('/').filter(Boolean)) {
-      acc += `/${part}`
-      segs.push({ label: part, path: acc })
-    }
-    segs.forEach((seg, i) => {
-      if (i > 0) crumb.append(h('span', { class: 'fs-sep' }, ['›']))
-      const isCurrent = i === segs.length - 1
-      const btn = h('button', { type: 'button', class: `fs-seg${isCurrent ? ' current' : ''}` }, [seg.label])
-      if (!isCurrent) btn.addEventListener('click', () => void load(seg.path))
-      crumb.append(btn)
-    })
-  }
-
-  const load = async (abs: string): Promise<void> => {
-    msg.textContent = ''
-    msg.className = 'msg'
-    listEl.classList.add('loading')
-    let listing: BrowseListing
-    try {
-      listing = await browse(abs)
-    } catch (err) {
-      // On a bad seed path, retry once at the server default (home) so the picker still opens.
-      if (abs) return void load('')
-      msg.textContent = errorText(err)
-      msg.className = 'msg error'
-      listEl.classList.remove('loading')
-      return
-    }
-    current = listing.path
-    renderCrumb(listing.path)
-    useBtn.disabled = false
-    listEl.innerHTML = ''
-    if (listing.entries.length === 0) {
-      listEl.append(h('p', { class: 'muted' }, ['No sub-folders here.']))
-    }
-    for (const entry of listing.entries) {
-      const row = h('button', { type: 'button', class: 'fs-entry' }, [
-        h('span', { class: 'fs-ico', innerHTML: FOLDER_SVG }),
-        h('span', { class: 'fs-name' }, [entry.name]),
-      ])
-      row.addEventListener('click', () => void load(entry.path))
-      listEl.append(row)
-    }
-    listEl.classList.remove('loading')
-  }
-
-  const closeBtn = h('button', { type: 'button', class: 'ghost' }, ['cancel'])
-  closeBtn.addEventListener('click', close)
-
-  const dialog = h('div', { class: 'dialog fs-picker' }, [
-    h('div', { class: 'dialog-head' }, [h('h2', {}, [title]), h('span', { class: 'spacer' }), closeBtn]),
-    crumb,
-    listEl,
-    h('div', { class: 'row' }, [msg, h('span', { class: 'spacer' }), useBtn]),
-  ])
-  overlay.append(dialog)
-  document.body.append(overlay)
-  void load(start)
-}
