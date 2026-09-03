@@ -357,3 +357,23 @@ assert.equal(formatTimestamp('not a date'), 'not a date', 'an unparseable stamp 
 ok('timestamps are rendered in UTC, independent of the reader’s locale')
 
 console.log(`\nreport_html_test: ${passed} checks passed`)
+
+// --- L10: the exported report declares a restrictive CSP --------------------------------------
+// The document already carries no script and references nothing over the network, so this is
+// defence in depth — but a report is the artifact meant to outlive the viewer, opened years later
+// by someone who has no idea what is or is not inside it. One meta tag is cheap insurance that it
+// cannot be made to reach the network or execute anything, whatever it ends up containing.
+{
+  const doc = buildReportHtml(data())
+  const csp = /<meta http-equiv="Content-Security-Policy" content="([^"]+)">/.exec(doc)
+  assert.ok(csp, 'the report declares a Content-Security-Policy meta tag')
+  const policy = csp[1]
+  assert.match(policy, /default-src 'none'/, 'nothing is allowed by default')
+  assert.match(policy, /img-src[^;]*data:/, 'the embedded data: screenshots are allowed')
+  assert.match(policy, /style-src[^;]*'unsafe-inline'/, 'the inline stylesheet is allowed')
+  assert.ok(!/script-src[^;]*'unsafe-inline'/.test(policy), 'inline script is NOT allowed')
+  // The tag has to precede the content it governs.
+  assert.ok(doc.indexOf('Content-Security-Policy') < doc.indexOf('<style>'), 'the policy is declared before the stylesheet')
+  ok('the report carries a restrictive CSP that still permits its own data: images and inline CSS')
+}
+

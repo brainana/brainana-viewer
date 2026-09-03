@@ -1074,8 +1074,12 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
       if (await view.setBaseVolume(url, paneState().vol ? 1 : 0)) syncVolumeControls()
       fovMode = effective
       syncFovControls()
-    } catch {
-      // fov switch failure is non-fatal — the previous base volume and mode stay in place
+    } catch (err) {
+      // Non-fatal: the previous base volume and displayed mode stay in place. But it must not be
+      // SILENT — the buttons are unchanged either way, so without this the control simply appears
+      // to do nothing and the user has no way to tell a failure from a no-op.
+      showError(errorText(err))
+      syncFovControls() // put the buttons back on the mode still displayed
     }
   }
 
@@ -1100,8 +1104,11 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
           syncVolumeControls() // re-seed the underlay rail for the switched volume's intensity range
         }
         store.set('volumeKey', vol.key)
-      } catch {
-        // volume switch failure is non-fatal — the previous base volume stays loaded
+      } catch (err) {
+        // Non-fatal — the previous base volume stays loaded — but say so, for the same reason as
+        // the fov switch above: a dropdown that silently keeps showing the old volume is
+        // indistinguishable from one that worked.
+        showError(errorText(err))
       }
     }),
   )
