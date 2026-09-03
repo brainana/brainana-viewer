@@ -30,7 +30,7 @@ import { buildColormapRegistry, type ColormapInfo } from '../data/colormap.ts'
 import { surfaceLutFromColormap } from '../data/functional.ts'
 import { createColorDisplay, type ColorDisplay } from './components/colorDisplay.ts'
 import { collectAtlasRows, collectVertex, collectMorphology, collectRetinotopy, collectSomatotopy, collectVisualFieldPoints } from '../report/collect.ts'
-import { BookmarkStore } from '../report/bookmarks.ts'
+import { BookmarkStore, bookmarkName, sameBookmarkIds } from '../report/bookmarks.ts'
 import { mountReportDialog } from '../report/dialog.ts'
 import type { LocationReadout, ViewState } from '../report/model.ts'
 import type { ReportContext } from '../report/generate.ts'
@@ -128,6 +128,38 @@ function layoutIcon(k: Layout): SVGSVGElement {
   }
   return svg
 }
+// Hand-written inline SVG (the project carries no icon library — see layoutIcon above and the
+// folder glyph in ui/dialogs/fsPicker.ts). currentColor strokes let an icon inherit its button's
+// hover and disabled treatment. A fresh element per call: a Node can only be in one place at a time,
+// and the point rows each need their own.
+function strokeIcon(size: number, paths: string[]): SVGSVGElement {
+  const ns = 'http://www.w3.org/2000/svg'
+  const svg = document.createElementNS(ns, 'svg')
+  svg.setAttribute('viewBox', '0 0 24 24')
+  svg.setAttribute('width', String(size))
+  svg.setAttribute('height', String(size))
+  svg.setAttribute('fill', 'none')
+  svg.setAttribute('stroke', 'currentColor')
+  svg.setAttribute('stroke-width', '2')
+  svg.setAttribute('stroke-linecap', 'round')
+  svg.setAttribute('stroke-linejoin', 'round')
+  svg.setAttribute('aria-hidden', 'true')
+  for (const d of paths) {
+    const path = document.createElementNS(ns, 'path')
+    path.setAttribute('d', d)
+    svg.append(path)
+  }
+  return svg
+}
+// Arrow into a tray: marks the report button as something that writes a file out, rather than
+// another control that rearranges the view.
+function downloadIcon(): SVGSVGElement {
+  return strokeIcon(13, ['M12 3v11', 'M7.5 10l4.5 4.5L16.5 10', 'M4 20h16'])
+}
+// Crosshair: "move the crosshair here", on a bookmarked point's row.
+function crosshairIcon(): SVGSVGElement {
+  return strokeIcon(12, ['M12 2.5v5', 'M12 16.5v5', 'M2.5 12h5', 'M16.5 12h5', 'M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0'])
+}
 const LAYOUTS: Array<{ k: Layout; icon: SVGSVGElement; title: string }> = [
   { k: 'grid', icon: layoutIcon('grid'), title: '2×2 grid (3 planes + surface)' },
   { k: 'row', icon: layoutIcon('row'), title: 'Surface on top, planes in a row' },
@@ -218,11 +250,17 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
     return b
   })
   const panelBtns = PANEL_BUTTONS.map((name) => h('button', { type: 'button', class: 'panel-btn' }, [name]))
-  // Report controls: bookmark the current crosshair, and open the report dialog. Both stay disabled
-  // until a subject is loaded (there is nothing to sample or describe before that).
-  const addPointBtn = h('button', { type: 'button', class: 'ghost sm', title: 'Bookmark the current crosshair for the report' }, ['+ point']) as HTMLButtonElement
+  // Report controls. They are mounted in the left rail's `points` block (assembled with volRail
+  // below), not the top bar: the rail is a full-height column, so there is room to list every
+  // bookmarked point with a jump-back button instead of reducing them to a count. Both buttons stay
+  // disabled until a subject is loaded — there is nothing to sample or describe before that.
+  const addPointBtn = h('button', { type: 'button', class: 'ghost rail-btn', title: 'Bookmark the current crosshair for the report' }, ['+ point']) as HTMLButtonElement
   const pointCount = h('span', { class: 'badge point-count', title: 'Bookmarked points' }, ['0'])
-  const reportBtn = h('button', { type: 'button', class: 'ghost sm', title: 'Generate an HTML report' }, ['report']) as HTMLButtonElement
+  const reportBtn = h(
+    'button',
+    { type: 'button', class: 'ghost rail-btn report-btn', title: 'Generate an HTML report and export it' },
+    [downloadIcon(), h('span', {}, ['generate report…'])],
+  ) as HTMLButtonElement
   addPointBtn.disabled = true
   reportBtn.disabled = true
   const viewBtns = VIEW_PRESETS.map((v) => {
@@ -315,9 +353,9 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
       markerModeSel.element,
     ]),
     tbDivide(),
-    // col 5: category tabs (row 1); report controls (row 2).
+    // col 5: category tabs. The report controls that used to fill this column's second row moved to
+    // the left rail's `points` block, which has room to show the points themselves.
     h('div', { class: 'tb-cell panels' }, panelBtns),
-    h('div', { class: 'tb-cell report-controls' }, [addPointBtn, pointCount, reportBtn]),
   ])
 
   // --- main grid ---
@@ -331,7 +369,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
   const panelResizer = h('div', { class: 'panel-resizer', title: 'Drag to resize the panel' })
   const infoResizer = h('div', { class: 'info-resizer', title: 'Drag to resize the info panel' })
   // Splitter on the underlay rail's right edge — drags --rail-w, sizing the rail column only. The
-  // Coordinates info column shares the same 168px start but is independent (its own --info-c1 seam).
+  // Coordinates info column starts at its own 168px and is independent (its own --info-c1 seam).
   const railResizer = h('div', { class: 'rail-resizer', title: 'Drag to resize the underlay rail' })
   // The side panel docks the active category's picker at the top (`sidePicker`) with
   // category-specific content below (`sideContent`): the atlas ROI legend, or a light caption for
@@ -493,10 +531,10 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
     const r = view?.baseVolumeRange()
     if (!r) {
       setVolRailEnabled(false)
-      volRail.hidden = true // no base volume (e.g. welcome screen) — keep the rail out of the layout
+      underlayBlock.hidden = true // no base volume — keep its controls out of the rail (points stay)
       return
     }
-    volRail.hidden = false
+    underlayBlock.hidden = false
     setVolRailEnabled(true)
     volGlobalMin = r.globalMin
     volGlobalMax = r.globalMax
@@ -529,7 +567,9 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
     h('span', { class: 'vol-dc-label' }),
     h('label', { class: 'vol-dc-row' }, [h('span', { class: 'vol-dc-mm' }, ['max']), clipMaxBox]),
   ])
-  const volRail = h('aside', { class: 'vol-rail' }, [
+  // The image-display half of the rail. Hidden on its own (not with the whole rail) when the subject
+  // has no base volume, so the points block below it survives that case.
+  const underlayBlock = h('div', { class: 'rail-block' }, [
     h('div', { class: 'vol-rail-head' }, [h('span', { class: 'vol-rail-title' }, ['underlay']), volResetBtn]),
     briSlider.element,
     conSlider.element,
@@ -540,8 +580,22 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
       h('label', { class: 'tb-field inline' }, [orientCheck, h('span', {}, ['AP/SI/LR'])]),
     ]),
   ])
+  // The points half: add button, a collapsible list of the bookmarked points (filled by
+  // renderPoints() once the BookmarkStore exists), and the report export. Reuses the .group
+  // collapsible from style.css — its caret is a ::before on .group-head.
+  const pointList = h('div', { class: 'group-body point-list' })
+  const pointListHead = h('button', { type: 'button', class: 'group-head', title: 'Show or hide the bookmarked points' }, ['bookmarked'])
+  const pointListGroup = h('div', { class: 'group point-list-group' }, [pointListHead, pointList])
+  pointListHead.addEventListener('click', () => pointListGroup.classList.toggle('collapsed'))
+  const pointsBlock = h('div', { class: 'rail-block points-block' }, [
+    h('div', { class: 'vol-rail-head' }, [h('span', { class: 'vol-rail-title' }, ['points']), pointCount]),
+    addPointBtn,
+    pointListGroup,
+    reportBtn,
+  ])
+  const volRail = h('aside', { class: 'vol-rail' }, [underlayBlock, pointsBlock])
   setVolRailEnabled(false) // disabled until a base volume loads
-  volRail.hidden = true // hidden on the welcome screen; revealed by syncVolumeControls once a volume loads
+  volRail.hidden = true // hidden on the welcome screen; revealed by syncReportControls once a subject loads
   // Rail is col 1 / row 1 of the dashboard grid, so it stops at the info panel (row 2) and the
   // info panel — spanning grid-column 1/-1 — reaches under it to the far-left edge.
   main.insertBefore(volRail, main.firstChild)
@@ -1890,9 +1944,53 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
     // would read as broken.
     addPointBtn.disabled = !ready || !lastMm
     reportBtn.disabled = !ready
-    pointCount.textContent = String(bookmarks.count())
+    const count = bookmarks.count()
+    pointCount.textContent = String(count)
+    pointListHead.textContent = count === 0 ? 'bookmarked' : `bookmarked (${count})`
+    // The rail is subject-scoped. Its underlay half hides itself when there is no base volume
+    // (syncVolumeControls), so the rail's own visibility tracks "a subject is loaded" instead —
+    // otherwise a volume-less subject would take the points block down with it.
+    volRail.hidden = !ready
   }
-  bookmarks.subscribe(syncReportControls)
+
+  // The rail's point list. Rebuilt only when the set of rows changes, so a rename cannot detach the
+  // edited row's buttons between mousedown and mouseup (see sameBookmarkIds).
+  let renderedPointIds: string[] | null = null
+  const renderPoints = (): void => {
+    const items = bookmarks.list()
+    const ids = items.map((b) => b.id)
+    if (sameBookmarkIds(renderedPointIds, ids)) return
+    renderedPointIds = ids
+    pointList.innerHTML = ''
+    if (items.length === 0) {
+      pointList.append(h('p', { class: 'muted point-empty' }, ['No points yet. Use “+ point” to bookmark the crosshair.']))
+      return
+    }
+    items.forEach((bookmark, i) => {
+      const name = h('input', { type: 'text', class: 'point-name', value: bookmark.label ?? '', placeholder: bookmarkName(bookmark, i) }) as HTMLInputElement
+      name.addEventListener('change', () => bookmarks.rename(bookmark.id, name.value))
+      // The whole "go back to that point": moveCrosshairToWorld re-emits through onCrosshair, so the
+      // marker, the coordinate editor and every info column follow with no extra wiring.
+      const go = h('button', { type: 'button', class: 'icon-btn point-go', title: 'Move the crosshair to this point' }, [crosshairIcon()])
+      go.addEventListener('click', () => view?.moveCrosshairToWorld(bookmark.readout.mm))
+      const del = h('button', { type: 'button', class: 'icon-btn point-del', title: 'Remove this point' }, ['×'])
+      del.addEventListener('click', () => bookmarks.remove(bookmark.id))
+      const mm = bookmark.readout.mm.map((v) => v.toFixed(1)).join(', ')
+      pointList.append(
+        h('div', { class: 'point-row' }, [
+          h('span', { class: 'point-n' }, [`${i + 1}`]),
+          name,
+          go,
+          del,
+          h('span', { class: 'point-mm', title: `${mm} mm` }, [mm]),
+        ]),
+      )
+    })
+  }
+  bookmarks.subscribe(() => {
+    renderPoints()
+    syncReportControls()
+  })
 
   addPointBtn.addEventListener('click', () => {
     const readout = currentReadout()

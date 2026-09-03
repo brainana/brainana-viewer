@@ -108,3 +108,31 @@ presence, escaping of hostile input, and that the embedded JSON round-trips.
 
 End-to-end verification uses the in-repo `datasets/demo_viewer` subject, a real brainana output with
 atlases, somatotopy, morphometry, and sidecars stamped `brainana 1.3.0`.
+
+## Addendum (2026-09-03) — entry points moved to the left rail
+
+The controls this spec placed in the top bar (`+ point`, the count badge, `report`) now live in a
+`points` block docked below the `underlay` controls in the left rail (`.vol-rail`). The top bar's
+`.tb-cell.report-controls` cell is gone.
+
+Rationale: the toolbar slot could only show a count, so seeing, renaming, or removing a point meant
+opening the modal — the only place the list was rendered. The rail is a full-height column, so the
+list fits inline, and the export action can carry a label that says what it does.
+
+What the rail adds beyond a relocation:
+
+- A collapsible list (the previously-unused `.group` collapsible from `style.css`) with one row per
+  point: ordinal, editable name, coordinate, and two buttons.
+- **Jump back to a point** — `view.moveCrosshairToWorld(bookmark.readout.mm)`. That re-emits through
+  `onCrosshair`, so the marker, coordinate editor and every info column follow. It restores the
+  crosshair position only, not the view state the point was added under.
+- **Remove** a point without opening the dialog.
+- `report` became `generate report…` with a download icon, so it no longer reads like the view
+  toggles it used to sit beside.
+
+The rail is now split into two independently-hidden `.rail-block`s: a subject with no base volume
+drops the underlay controls but keeps its points. The rail's own visibility tracks "a subject is
+loaded" (`syncReportControls`) rather than "a base volume is loaded" (`syncVolumeControls`).
+
+The store, the readout snapshot, the dialog and the generated HTML are unchanged. Bookmarks stay
+session- and subject-scoped, still cleared on a subject switch.
