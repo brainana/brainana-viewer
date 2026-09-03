@@ -248,12 +248,13 @@ input[type="range"]:focus { outline: none; }
 .point-empty { margin: 0; font-size: var(--fs-1); line-height: 1.35; }
 /* Two lines per point so a name, both buttons and the coordinate all fit the rail's width:
      [n] [name.............] [go] [del]
-     [ -12.0, -8.5, 3.2 ............. ]
-   minmax(0, 1fr) on the name column keeps a long label from forcing the rail wider than its drag. */
+         [ -12.0, -8.5, 3.2 ............. ]
+   Coordinates sit under the name box, not the index. minmax(0, 1fr) on the name column keeps a
+   long label from forcing the rail wider than its drag. */
 .point-row {
   display: grid;
   grid-template-columns: 2ch minmax(0, 1fr) var(--ctl-h) var(--ctl-h);
-  grid-template-areas: "n name go del" "mm mm mm mm";
+  grid-template-areas: "n name go del" ". mm mm mm";
   align-items: center;
   column-gap: var(--sp-1);
   row-gap: 2px;
