@@ -33,6 +33,22 @@ asar: true
 asarUnpack:
   - "**/*.node"
 
+# Do NOT rebuild native modules against Electron's headers.
+#
+# The only native module anywhere in the tree is `cpu-features`, an OPTIONAL dependency of ssh2
+# that ssh2 loads inside a bare try/catch (lib/protocol/constants.js) and uses solely to order
+# cipher preferences. It is not needed for SFTP, or for anything else this app does.
+#
+# Rebuilding it is therefore pure cost, and past Electron ~40 it is a cost that FAILS: its
+# Nan-based binding does not compile against modern V8 headers on an older toolchain (gcc 12 here
+# dies in v8-primitive.h). That failure aborts the entire electron-builder run — the app itself is
+# fine, but no installer is produced. Skipping the rebuild also removes a build-time dependency on
+# a working C++ toolchain from every contributor and every CI runner.
+#
+# REVISIT IF a native module that is genuinely REQUIRED is ever added: with npmRebuild off it would
+# ship built for the system Node ABI rather than Electron's, and fail to load at runtime.
+npmRebuild: false
+
 directories:
   output: apps/viewer/release
   # Icon source: electron-builder auto-detects build/icon.png (1024x1024) and generates

@@ -48,8 +48,8 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@niivue/niivue": "^0.69.0",
-    "electron": "^33.0.0",
-    "electron-builder": "^25.0.0",
+    "electron": "^43.5.1",
+    "electron-builder": "^26.15.3",
     "eslint": "^10.9.1",
     "fflate": "^0.8.2",
     "globals": "^17.12.0",
