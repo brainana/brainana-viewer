@@ -1,6 +1,6 @@
 // Unit tests for the bookmark store (apps/viewer/src/report/bookmarks.ts).
 import assert from 'node:assert/strict'
-import { BookmarkStore, bookmarkName } from '../apps/viewer/src/report/bookmarks.ts'
+import { BookmarkStore, bookmarkName, sameBookmarkIds } from '../apps/viewer/src/report/bookmarks.ts'
 
 let passed = 0
 const ok = (name) => {
@@ -95,5 +95,14 @@ store2.clear()
 assert.equal(store2.count(), 0)
 assert.deepEqual(events, [0, 1, 0])
 ok('clear empties the store and only notifies when something changed')
+
+// --- sameBookmarkIds (the guard both point lists use to decide whether to rebuild their rows) ---
+assert.equal(sameBookmarkIds(null, []), false, 'nothing rendered yet always rebuilds, even for an empty list')
+assert.equal(sameBookmarkIds([], []), true)
+assert.equal(sameBookmarkIds(['bm-1', 'bm-2'], ['bm-1', 'bm-2']), true, 'a rename leaves the ids alone, so no rebuild')
+assert.equal(sameBookmarkIds(['bm-1', 'bm-2'], ['bm-2', 'bm-1']), false, 'a reorder rebuilds')
+assert.equal(sameBookmarkIds(['bm-1'], ['bm-1', 'bm-2']), false, 'an add rebuilds')
+assert.equal(sameBookmarkIds(['bm-1', 'bm-2'], ['bm-1']), false, 'a remove rebuilds')
+ok('sameBookmarkIds only reports equality for the identical id sequence')
 
 console.log(`\nreport_bookmarks_test: ${passed} checks passed`)

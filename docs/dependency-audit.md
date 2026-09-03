@@ -49,9 +49,12 @@ packaged desktop app.
   `node_modules`** in the desktop build — Vite bundles them into `dist/`
   (per `electron-builder.yml`).
 - `ssh2` **is** shipped as a runtime `node_modules` dependency (declared in the
-  root `package.json` `dependencies`). It has an optional native binary
-  (`cpu-features`, a `.node` file) that `electron-builder` unpacks from the asar;
-  `ssh2` falls back to pure JS if the ABI mismatches, so SFTP works regardless.
+  root `package.json` `dependencies`). Its optional native binary
+  (`cpu-features`) is **not built**: `npmRebuild: false` in `electron-builder.yml`
+  skips it, because its Nan binding no longer compiles against modern V8 headers
+  and the failure aborts the whole packaging run. `ssh2` loads it in a bare
+  try/catch and uses it only to order cipher preferences, so SFTP is unaffected.
+  This also means packaging needs no C++ toolchain on contributor machines or CI.
 
 ---
 
@@ -64,8 +67,8 @@ and package the product but are not shipped to end users.
 | --- | --- | --- | --- | --- |
 | **[typescript](https://www.typescriptlang.org/)** | `^5.7.0` | 5.9.3 | Apache-2.0 | Typechecking (`tsc --noEmit`) and the type-stripping the runtime relies on. |
 | **[vite](https://vitejs.dev/)** | `^6.0.0` | 6.4.3 | MIT | Frontend dev server + production bundler for the viewer SPA. |
-| **[electron](https://www.electronjs.org/)** | `^33.0.0` | 33.4.11 | MIT | Chromium shell for the desktop app — provides the WebGL2-reliable runtime NiiVue needs. |
-| **[electron-builder](https://www.electron.build/)** | `^25.0.0` | 25.1.8 | MIT | Packages per-OS installers (AppImage/deb, dmg/zip, nsis). |
+| **[electron](https://www.electronjs.org/)** | `^43.5.1` | 43.5.1 | MIT | Chromium shell for the desktop app — provides the WebGL2-reliable runtime NiiVue needs. Kept inside the supported window (latest three majors); 33 was eleven majors out of support. |
+| **[electron-builder](https://www.electron.build/)** | `^26.15.3` | 26.15.3 | MIT | Packages per-OS installers (AppImage/deb, dmg, nsis). v25 predates Electron 40 and cannot package it. |
 | **[@niivue/niivue](https://github.com/niivue/niivue)** | `^0.69.0` | 0.69.0 | BSD-2-Clause | Also listed here so it is available at build time for Vite bundling. |
 | **[fflate](https://github.com/101arrowz/fflate)** | `^0.8.2` | 0.8.3 | MIT | (build-time, bundled) — see §2. |
 | **[nifti-reader-js](https://github.com/rii-mango/NIFTI-Reader-JS)** | `^0.8.0` | 0.8.0 | MIT | (build-time, bundled) — see §2. |

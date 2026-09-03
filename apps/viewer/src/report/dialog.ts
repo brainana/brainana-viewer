@@ -2,11 +2,11 @@
 // destination, and generate. Download is preselected — it is the destination that works the same in
 // every runtime — with "save into the dataset" available for keeping the report beside the data
 // (including on a remote SFTP source, which the server-side export path handles identically).
-import { h, field, errorText } from '@brainana/ui/dom.ts'
+import { h, field, errorText, dismissOnBackdrop } from '@brainana/ui/dom.ts'
 import { ServerExport, downloadBlob } from '@brainana/core-client/exportDestination.ts'
 import type { RuntimeClient } from '@brainana/core-client/runtimeClient.ts'
 import { openFsPicker } from '../ui/dialogs/fsPicker.ts'
-import { BookmarkStore, bookmarkName } from './bookmarks.ts'
+import { BookmarkStore, bookmarkName, sameBookmarkIds } from './bookmarks.ts'
 import { buildReportHtml } from './html.ts'
 import { generateReport, reportFilename, type ReportContext } from './generate.ts'
 
@@ -43,25 +43,21 @@ export function mountReportDialog(deps: ReportDialogDeps): void {
     unsubscribe()
     overlay.remove()
   }
-  overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) close()
-  })
+  dismissOnBackdrop(overlay, close)
 
   // --- bookmark list ---
   const pointList = h('div', { class: 'report-points' })
-  // Ids of the rows currently in the DOM. A rename emits like any other change, but rebuilding on one
-  // would detach that row's "remove" button between mousedown and mouseup — the blur that commits the
-  // edit fires first — so the click would never land. Rebuild only when the rows themselves change;
-  // null forces the first render.
+  // Ids of the rows currently in the DOM — rebuild only when the rows themselves change (see
+  // sameBookmarkIds for why a rename must not rebuild). null forces the first render.
   let renderedIds: string[] | null = null
   const renderPoints = (): void => {
     const items = bookmarks.list()
     const ids = items.map((b) => b.id)
-    if (renderedIds && renderedIds.length === ids.length && renderedIds.every((id, i) => id === ids[i])) return
+    if (sameBookmarkIds(renderedIds, ids)) return
     renderedIds = ids
     pointList.innerHTML = ''
     if (items.length === 0) {
-      pointList.append(h('p', { class: 'muted' }, ['No points bookmarked. Close this dialog and use “+ point” to add the current crosshair.']))
+      pointList.append(h('p', { class: 'muted' }, ['No points bookmarked. Close this dialog and use “+ point” in the points panel to add the current crosshair.']))
       return
     }
     items.forEach((bookmark, i) => {

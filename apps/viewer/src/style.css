@@ -163,11 +163,12 @@ input[type="range"]:focus { outline: none; }
 .dashboard {
   position: relative; flex: 1 1 auto; min-height: 0;
   display: grid;
-  /* col 1 = underlay rail (spans the viewer row only); the info panel spans 1/-1, so it reaches
-     under the rail to the far-left edge. --rail-width collapses to 0 when no base volume is loaded.
-     --rail-w is the rail's base width (draggable via .rail-resizer); the Coordinates column just
-     shares the same 168px starting value, but the two resize independently. */
-  --rail-w: 168px;
+  /* col 1 = the left rail, underlay controls over points (spans the viewer row only); the info panel
+     spans 1/-1, so it reaches under the rail to the far-left edge. --rail-width collapses to 0 when
+     no subject is loaded (the underlay half hides on its own when there is no base volume).
+     --rail-w is the rail's base width (draggable via .rail-resizer); the Coordinates column starts
+     at its own 168px and the two resize independently. */
+  --rail-w: 200px;
   grid-template-columns: var(--rail-width, var(--rail-w)) minmax(0, 1fr) var(--legend-width);
   grid-template-rows: minmax(0, 1fr) var(--info-height);
   gap: 1px; background: var(--border);
@@ -216,6 +217,54 @@ input[type="range"]:focus { outline: none; }
 .dcg-label { font-size: var(--fs-1); color: var(--muted); text-align: right; padding-right: 4px; line-height: 22px; }
 /* Crosshair + AP/SI/LR toggles, relocated from the top bar. */
 .vol-rail-toggles { display: flex; flex-direction: column; gap: var(--sp-2); margin-top: var(--sp-2); padding-top: var(--sp-3); border-top: 1px solid var(--border); }
+/* One stacked section of the rail (underlay controls, points). Each hides independently: a subject
+   with no base volume drops the underlay block but keeps its points.
+   Framed as its own panel: a hairline alone did not read as a boundary against the rail's own
+   background, so the two sections looked like one long column of controls. --border-2 is the
+   token for a panel frame, and the rail's --sp-4 gap keeps the cards apart. */
+.rail-block {
+  display: flex; flex-direction: column; gap: var(--sp-4);
+  padding: var(--sp-3);
+  border: 1px solid var(--border-2); border-radius: var(--r-md);
+  background: var(--panel-2);
+}
+/* display:flex above out-ranks the UA [hidden] rule — same trap as .vol-rail[hidden]. */
+.rail-block[hidden] { display: none; }
+
+/* ---------- points block (bookmarked points + report export) ---------- */
+/* Tighter rows than the underlay block's sliders; the .rail-block frame does the separating. */
+.points-block { gap: var(--sp-3); }
+/* Rail buttons span the column: at this width a centred pill reads as floating loose. */
+.rail-btn { width: 100%; }
+/* The export action. The icon and the ellipsis do the signalling, so it stays a ghost button rather
+   than competing with the accent used for a dialog's confirm. */
+.report-btn { gap: var(--sp-2); }
+/* No hairline above the list: it read as a divider cutting `+ point` off from the points it adds,
+   and the block's own gap already separates them. Drop .group's padding with it, or the removed
+   border leaves a double gap behind. Two classes because .group's own border-top is declared later
+   in this file and would otherwise win on source order. */
+.points-block .point-list-group { margin: 0; border-top: 0; padding: 0; }
+.point-list { gap: var(--sp-2); }
+.point-empty { margin: 0; font-size: var(--fs-1); line-height: 1.35; }
+/* Two lines per point so a name, both buttons and the coordinate all fit the rail's width:
+     [n] [name.............] [go] [del]
+     [ -12.0, -8.5, 3.2 ............. ]
+   minmax(0, 1fr) on the name column keeps a long label from forcing the rail wider than its drag. */
+.point-row {
+  display: grid;
+  grid-template-columns: 2ch minmax(0, 1fr) var(--ctl-h) var(--ctl-h);
+  grid-template-areas: "n name go del" "mm mm mm mm";
+  align-items: center;
+  column-gap: var(--sp-1);
+  row-gap: 2px;
+}
+.point-n { grid-area: n; color: var(--muted); font-size: var(--fs-1); font-variant-numeric: tabular-nums; }
+/* input.<class> specificity is needed to beat the generic input[type=text] padding. */
+input.point-name { grid-area: name; width: 100%; min-width: 0; padding: 0 var(--sp-2); font-size: var(--fs-1); }
+.point-go { grid-area: go; }
+.point-del { grid-area: del; font-size: var(--fs-2); line-height: 1; }
+/* Matches the report dialog's coordinate treatment (.report-point-mm). */
+.point-mm { grid-area: mm; color: var(--muted); font-family: var(--mono); font-size: var(--fs-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .viewer-area {
   position: relative;
   grid-column: 2; grid-row: 1;
@@ -674,8 +723,7 @@ input.slider-num { flex: 0 0 auto; width: var(--num-w); padding: 0 var(--sp-1); 
 .colorbar-ticks { display: flex; justify-content: space-between; font-size: var(--fs-xs); color: var(--muted); }
 .colorbar-tick:nth-child(2) { color: var(--text); }
 
-/* ---------- report controls (toolbar) + report dialog ---------- */
-.report-controls { display: flex; align-items: center; gap: var(--sp-2); }
+/* ---------- report dialog (the point count badge is shared with the rail's points block) ---------- */
 .point-count { min-width: 2ch; text-align: center; font-variant-numeric: tabular-nums; }
 
 .report-dialog { width: min(620px, 92vw); }

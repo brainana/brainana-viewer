@@ -88,3 +88,15 @@ export class BookmarkStore {
 export function bookmarkName(bookmark: Bookmark, index: number): string {
   return bookmark.label ?? `Bookmarked #${index + 1}`
 }
+
+/**
+ * True when `ids` is the same sequence as `prev` (`null` — nothing rendered yet — is never equal).
+ *
+ * Callers that render a bookmark list rebuild it only when this returns false. A rename emits like
+ * any other change, but rebuilding on one would detach the edited row's buttons between mousedown
+ * and mouseup — the blur that commits the edit fires first — so the click would never land.
+ */
+export function sameBookmarkIds(prev: string[] | null, ids: string[]): boolean {
+  if (!prev || prev.length !== ids.length) return false
+  return prev.every((id, i) => id === ids[i])
+}
