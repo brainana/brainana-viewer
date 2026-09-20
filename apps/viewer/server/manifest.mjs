@@ -13,7 +13,6 @@ import {
   ATLAS_SPACE_ORDER,
   anatomyPatterns,
   listViewTargets,
-  resolveFsDir,
   resolveViewTarget,
   sessionDirs,
   summarizeTarget,
