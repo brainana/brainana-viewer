@@ -244,14 +244,14 @@ function buildLongitudinal({ target, derived, fileUrl }) {
     const suffix = key.slice(3)
     const right = derived.longMaps[`rh.${suffix}`]
     if (!right) continue // both hemispheres or nothing: a half-pair becomes a 404ing UI option
-    const [measure, stat] = suffix.split('-')
+    const [measure, statistic] = suffix.split('-')
     changeMaps.push({
       key: suffix,
       measure,
-      stat,
+      statistic,
       // rate and spc are signed and want a diverging colormap centred on zero; avg is the plain
       // temporal mean of the measure.
-      signed: stat === 'rate' || stat === 'spc',
+      signed: statistic === 'rate' || statistic === 'spc',
       left: fileUrl(derived.longMaps[key]),
       right: fileUrl(right),
       range: derived.longRanges?.[key] ?? null,
