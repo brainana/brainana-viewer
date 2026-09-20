@@ -2,6 +2,64 @@
 
 All notable changes to Brainana Viewer are documented here.
 
+## [Unreleased]
+
+Support for brainana 3.0.0, whose `anat.synthesis_level` gives a subject more than one
+reconstruction. Output from 1.x and 2.x is read exactly as before.
+
+### Added
+
+- **A scan picker.** The subject dropdown gains a second selector listing that subject's
+  reconstructions, grouped cross-sectional / longitudinal. A subject has more than one only when
+  brainana ran at `synthesis_level: "session"` or `"session_longitudinal"`; with one it stays
+  visible but disabled. Requested as `?scan=<id>` on the manifest route; an id naming no
+  reconstruction of that subject is a 404, never a silent fallback to a different scan.
+- **Longitudinal change maps** (`change` tab, base-template scans only): the per-vertex rate,
+  temporal mean and symmetrised percent change brainana fits across a subject's timepoints, for
+  thickness, area and curvature, with a magnitude threshold and the ROI rate table from
+  `?h.long.roi-rates.csv`. Signed maps get a symmetric window so zero sits on the diverging
+  colormap's neutral colour, and the colorbar is anchored *decrease / no change / increase*.
+- **Time-source guardrails.** When `sessions.tsv` carries no `age` or `acq_time` column brainana
+  fits against scan order, and the result is a change per **scan** that looks exactly like a rate.
+  The panel pins a non-dismissible note, every statistic label and the colorbar and the crosshair
+  row carry the denominator, the ROI table repeats it in its header, and the report puts the
+  caveat in `notes` — which render above the fold — as well as in its longitudinal section.
+  brainana's `base_segmentation_agreement.json` is surfaced beside it.
+- **The report names its scan**, in prose ("ses-002 (long) — base-seeded, in the base template's
+  space"), and the filename includes it so two timepoints of one animal cannot collide.
+- An MGH reader for the change maps, and a guard that withholds any surface overlay whose vertex
+  count disagrees with the mesh it would be painted on.
+
+### Fixed
+
+- **A `session_longitudinal` tree rendered nothing at all.** Such a run publishes a subject-level
+  `anat/` holding only `space-base` products, so anat resolution preferred it over the sessions,
+  found no matching T1w, and then looked for a `fastsurfer/sub-X` that a longitudinal run does not
+  produce — leaving no anatomy, no surfaces and no atlases.
+- **Sessions after the first were unreachable.** Anat resolution took the first `ses-*/anat` and
+  nothing in the UI said the others existed.
+- **Remote datasets with a session-keyed reconstruction had no surfaces.** The SFTP mirror
+  hardcoded `fastsurfer/<subjectId>`, which brainana only writes when a subject has one session
+  with anatomy. Materialisation is now scoped to the reconstructions the selected scan needs, so a
+  longitudinal subject's five recon trees are not all mirrored.
+- **Two sessions of one subject shared a derived-asset cache directory**, and because the second
+  build's overwrite was newer than its source the mtime guard never regenerated it — a collision
+  that survived a reload. Keyed by reconstruction now; a pre-v3 tree keeps its existing cache
+  directory name.
+- A session-keyed reconstruction now wins over a stale subject-keyed one when both exist.
+- The FOV tooltip no longer tells someone to reprocess to get a full-FOV conform for a
+  longitudinal reconstruction, which never has one.
+
+### Changed
+
+- The manifest gains `scan`, `scans`, `synthesisLevel`, `warnings` and `longitudinal`; `session`,
+  `id` and `label` are unchanged, and a pre-v3 tree's manifest is otherwise byte-identical.
+- Bookmarked points are cleared on a scan switch as they are on a subject switch, and the empty
+  state now names what was cleared instead of the list silently emptying.
+- The crosshair is restored across a scan switch only when the two share a frame (the base
+  template and its base-seeded timepoints do; two cross-sectional sessions do not).
+- `Manifest.surfaces.veryinflated` dropped from the type — the server has never emitted it.
+
 ## [1.0.0] — 2026-07-18
 
 First public release of the Brainana Viewer as a cross-platform desktop app.

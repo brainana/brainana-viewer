@@ -1051,7 +1051,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
   // volSelect's value intact is what lets 'best' restore the previous choice with no saved index.
   const syncFovControls = (): void => {
     const available = hasFullFov()
-    const tip = fovTooltip(manifest?.fullFov ?? null)
+    const tip = fovTooltip(manifest?.fullFov ?? null, manifest?.scan?.stream ?? null)
     for (const b of fovBtns) {
       const mode = b.dataset.fov as FovMode
       b.classList.toggle('active', mode === fovMode)
