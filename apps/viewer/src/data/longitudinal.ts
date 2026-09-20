@@ -211,6 +211,32 @@ export const MEASURE_TO_STATS: Record<Measure, string[]> = {
   curv: ['MeanCurv', 'GausCurv', 'CurvInd', 'FoldInd'],
 }
 
+export interface RoiRateTableRow extends RoiRateRow {
+  hemi: 'L' | 'R'
+}
+
+/**
+ * Which rows the ROI table shows, in what order.
+ *
+ * Pulled out of the component because this is the part with decisions in it: the CSV carries
+ * FreeSurfer's stat names rather than the change maps' measure ids, so picking the rows for
+ * "thickness" is a lookup rather than an equality test.
+ */
+export function selectRoiRows(
+  rows: RoiRateTableRow[],
+  { measure, hemi = 'both', sort = 'slope' }: { measure: Measure; hemi?: 'both' | 'L' | 'R'; sort?: 'slope' | 'roi' },
+): RoiRateTableRow[] {
+  const stats = MEASURE_TO_STATS[measure] ?? []
+  const filtered = rows.filter((r) => stats.includes(r.measure) && (hemi === 'both' || r.hemi === hemi))
+  return filtered.sort((a, b) =>
+    sort === 'roi'
+      ? a.roi.localeCompare(b.roi, undefined, { numeric: true, sensitivity: 'base' }) || a.hemi.localeCompare(b.hemi)
+      : // Largest absolute change first: the question a rate table is opened to answer is "where
+        // did the most happen", and sign is already a column.
+        Math.abs(b.slope) - Math.abs(a.slope),
+  )
+}
+
 // --- base segmentation agreement ---------------------------------------------------------------
 
 export interface AgreementRow {

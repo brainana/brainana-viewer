@@ -23,7 +23,8 @@ import { createAtlasPanel, type AtlasPanel, type AtlasSelection } from './panels
 import { createFunctionPanel, choiceKey, type FunctionPanel, type FunctionChoice } from './panels/function.ts'
 import { createMorphologyPanel, type MorphologyPanel, type MarkerMode } from './panels/morphology.ts'
 import { createLongitudinalPanel, changeKey, hasChangeMaps, type LongitudinalPanel, type ChangeChoice } from './panels/longitudinal.ts'
-import { symmetricRobustRange, robustRange, rateUnitLabel, parseSegmentationAgreement } from '../data/longitudinal.ts'
+import { createRoiRateTable, type RoiRateTable } from './roiRateTable.ts'
+import { symmetricRobustRange, robustRange, rateUnitLabel, parseSegmentationAgreement, parseRoiRatesCsv, isTimeInterpretable, type Measure } from '../data/longitudinal.ts'
 import { drawVisualField } from './visualFieldPlot.ts'
 import { h, errorText, selectField, asyncHandler } from '@brainana/ui/dom.ts'
 import { createSlider } from '@brainana/ui/components/slider.ts'
@@ -394,7 +395,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
   const changeSlot = h('div', { class: 'side-slot', hidden: true })
   const morphSlot = h('div', { class: 'side-slot', hidden: true })
   const sidePlaceholder = h('div', { class: 'legend-title muted' }, ['Select atlas, morphology, or function above.'])
-  const sideContent = h('div', { class: 'side-content' }, [legendSlot, funcSlot, morphSlot, sidePlaceholder])
+  const sideContent = h('div', { class: 'side-content' }, [legendSlot, funcSlot, changeSlot, morphSlot, sidePlaceholder])
   // Docked at the bottom of the side panel: the shared "Color display" section (colormap + legend +
   // display range + clip), mounted once the view/colormaps exist. Applies to the active overlay.
   const colorDock = h('div', { class: 'color-dock' })
@@ -1160,6 +1161,8 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
   // --- function state (retinotopy / somatotopy) ---
   let functionPanel: FunctionPanel | null = null
   let longPanel: LongitudinalPanel | null = null
+  let roiRateTable: RoiRateTable | null = null
+  let lastAgreement: Array<{ timepoint: string; dice: number }> = []
   let funcChoice: FunctionChoice | null = null
   let funcThreshold = 0
   let funcOpacity = 1
@@ -1509,16 +1512,45 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
   // domain. Best-effort: it is context for the change maps, never a gate on showing them.
   const loadAgreement = async (mf: Manifest): Promise<void> => {
     const url = mf.longitudinal?.agreement
+    lastAgreement = []
     if (!url) {
       longPanel?.setAgreement([])
       return
     }
     try {
       const rows = parseSegmentationAgreement(await client.apiFetch(url).then((r) => r.json()))
+      lastAgreement = rows
       longPanel?.setAgreement(rows)
     } catch {
+      lastAgreement = []
       longPanel?.setAgreement([])
     }
+  }
+
+  // The ROI fits, fetched as CSV (they are handed over as URLs rather than inlined: a few dozen
+  // rows per hemisphere is not worth adding to every manifest for a panel that is usually closed).
+  const loadRoiRates = async (mf: Manifest): Promise<void> => {
+    const rates = mf.longitudinal?.roiRates
+    if (!rates?.left || !rates?.right) {
+      roiRateTable?.clear()
+      return
+    }
+    try {
+      const [left, right] = await Promise.all(
+        [rates.left, rates.right].map((url) => client.apiFetch(url).then((r) => r.text()).then(parseRoiRatesCsv)),
+      )
+      roiRateTable?.setRows(left, right)
+    } catch {
+      roiRateTable?.clear()
+    }
+  }
+
+  // Keep the table's measure, unit and per-scan marker in step with the map on screen.
+  const syncRoiRateTable = (): void => {
+    const map = changeMapFor(changeChoice)
+    if (!map || !roiRateTable) return
+    const info = manifest?.longitudinal ?? null
+    roiRateTable.setMeasure(map.measure as Measure, rateUnitLabel(info, map), !isTimeInterpretable(info))
   }
 
   const selectChange = async (choice: ChangeChoice | null): Promise<void> => {
@@ -1542,6 +1574,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
       }
     }
     await applyChangeSurface()
+    syncRoiRateTable()
     refreshColorDisplay()
     updateSurfaceReport()
   }
@@ -2094,6 +2127,23 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
             clip: { lo: funcClipLo, hi: funcClipHi },
           }
         : null,
+      longitudinal: (() => {
+        const map = changeMapFor(changeChoice)
+        if (!map || !changeChoice) return null
+        const info = manifest?.longitudinal ?? null
+        const values = changeValues.get(map.key)
+        return {
+          measure: map.measure,
+          statistic: map.statistic,
+          colormap: changeColormapKey(),
+          displayRange: values ? changeWindow(values, map.signed) : null,
+          threshold: changeThreshold,
+          opacity: changeOpacity,
+          unit: rateUnitLabel(info, map),
+          timeSource: info?.timeSource ?? null,
+          timeInterpretable: isTimeInterpretable(info),
+        }
+      })(),
       camera: view?.getCamera() ?? null,
       markerMode,
     }
@@ -2116,12 +2166,39 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
           subjectId: manifest?.id ?? null,
           subjectLabel: manifest?.label ?? null,
           session: manifest?.session ?? null,
+          scan: manifest?.scan
+            ? { id: manifest.scan.id, stream: manifest.scan.stream, session: manifest.scan.session, label: manifest.scan.label }
+            : null,
+          synthesisLevel: manifest?.synthesisLevel ?? null,
           relativePath: manifest?.relativePath ?? null,
         }
       },
       loadedAssets: () => view?.loadedAssets() ?? [],
       currentReadout,
       viewState,
+      // Supplied as a closure so generate.ts stays ignorant of dashboard internals, and resolved
+      // at generation time like dataset() -- the scan can change while the dialog is open.
+      longitudinal: () => {
+        const info = manifest?.longitudinal ?? null
+        if (!info || !changeMapFor(changeChoice)) return null
+        return {
+          timepoints: info.timepoints,
+          times: info.times,
+          timeSource: info.timeSource,
+          timeInterpretable: isTimeInterpretable(info),
+          skipped: info.skipped,
+          roiRates: (roiRateTable?.rows() ?? []).map((r) => ({
+            roi: r.roi,
+            hemi: r.hemi,
+            measure: r.measure,
+            slope: r.slope,
+            mean: r.mean,
+            spc: r.spc,
+            nTimepoints: r.nTimepoints,
+          })),
+          agreement: lastAgreement,
+        }
+      },
       // A hidden pane has a zero-sized canvas; passing its visibility lets the report say the pane
       // was hidden rather than reporting a failed capture.
       panes: () => ({
@@ -2521,6 +2598,10 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
         { opacity: changeOpacity },
       )
       sidePicker.append(longPanel.element)
+      roiRateTable = createRoiRateTable()
+      changeSlot.innerHTML = ''
+      changeSlot.append(roiRateTable.element)
+      void loadRoiRates(manifest)
       changeBtn.hidden = !hasChangeMaps(manifest)
       // A scan without change maps cannot stay docked on a tab that no longer exists.
       if (!hasChangeMaps(manifest) && dockedTab === 'longitudinal') dockedTab = null

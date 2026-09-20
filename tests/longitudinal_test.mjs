@@ -8,7 +8,7 @@ import assert from 'node:assert/strict'
 import {
   isTimeInterpretable, timeUnit, rateUnitLabel, timeSourceCaveat, timeSourceSummary,
   skippedSummary, exactlyDeterminedNote, symmetricRobustRange, robustRange,
-  parseRoiRatesCsv, parseSegmentationAgreement, worstAgreement, MEASURE_TO_STATS,
+  parseRoiRatesCsv, parseSegmentationAgreement, worstAgreement, MEASURE_TO_STATS, selectRoiRows,
 } from '../apps/viewer/src/data/longitudinal.ts'
 import { maskSurfaceBinsByMagnitude, quantizeScalarToBins } from '../apps/viewer/src/data/functional.ts'
 
@@ -157,6 +157,30 @@ ok('the denominator follows the time source, defaulting to per-scan')
   assert.ok(MEASURE_TO_STATS.area.includes('SurfArea'))
   assert.ok(!Object.values(MEASURE_TO_STATS).flat().includes('NumVert'), 'NumVert is mesh density, not a morphometric')
   ok('each vertex-wise measure maps to the FreeSurfer stat columns that belong to it')
+}
+
+// --- which ROI rows the table shows -------------------------------------------------------------
+{
+  const row = (roi, measure, slope, hemi) => ({ roi, measure, slope, mean: 1, spc: 1, nTimepoints: 3, hemi })
+  const all = [
+    row('V1', 'ThickAvg', 0.1, 'L'),
+    row('MT', 'ThickAvg', -0.5, 'L'),
+    row('V1', 'ThickAvg', 0.3, 'R'),
+    row('V1', 'SurfArea', 9.9, 'L'),
+    row('V1', 'NumVert', 500, 'L'),
+  ]
+  // The CSV carries FreeSurfer's stat names, so selecting "thickness" is a lookup, not an equality
+  // test against the measure id -- and NumVert is mesh density, which is not a morphometric.
+  assert.deepEqual(selectRoiRows(all, { measure: 'thickness' }).map((r) => `${r.roi}${r.hemi}`), ['MTL', 'V1R', 'V1L'])
+  assert.deepEqual(selectRoiRows(all, { measure: 'area' }).map((r) => r.measure), ['SurfArea'])
+  assert.equal(selectRoiRows(all, { measure: 'curv' }).length, 0)
+  // Largest absolute change first: sign is already a column, so ordering by magnitude answers
+  // "where did the most happen" rather than "what increased".
+  assert.deepEqual(selectRoiRows(all, { measure: 'thickness' }).map((r) => r.slope), [-0.5, 0.3, 0.1])
+  assert.deepEqual(selectRoiRows(all, { measure: 'thickness', hemi: 'R' }).map((r) => r.hemi), ['R'])
+  assert.deepEqual(selectRoiRows(all, { measure: 'thickness', sort: 'roi' }).map((r) => `${r.roi}${r.hemi}`), ['MTL', 'V1L', 'V1R'])
+  assert.deepEqual(selectRoiRows([], { measure: 'thickness' }), [])
+  ok('the ROI table selects by FreeSurfer stat name and orders by absolute change')
 }
 
 // --- base segmentation agreement -------------------------------------------------------------------

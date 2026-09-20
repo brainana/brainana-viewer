@@ -159,6 +159,19 @@ export interface ViewState {
     displayRange: { min: number; max: number } | null
     clip: { lo: number | null; hi: number | null }
   } | null
+  longitudinal: {
+    measure: string
+    statistic: string
+    colormap: string
+    displayRange: { min: number; max: number } | null
+    threshold: number
+    opacity: number
+    /** What the numbers are in. Never omitted: a rate without its denominator is not a rate. */
+    unit: string
+    timeSource: string | null
+    /** False when brainana fit against scan order rather than real elapsed time. */
+    timeInterpretable: boolean
+  } | null
   camera: { azimuth: number; elevation: number; scale: number } | null
   markerMode: string
 }
@@ -175,10 +188,27 @@ export interface ReportData {
     subjectId: string | null
     subjectLabel: string | null
     session: string | null
+    /**
+     * Which reconstruction the report was taken from. A subject can have several (brainana's
+     * anat.synthesis_level), and two of them look alike on screen, so a report that does not name
+     * its scan cannot be checked against the data later.
+     */
+    scan: { id: string; stream: string; session: string | null; label: string } | null
+    synthesisLevel: string | null
     relativePath: string | null
   }
   /** Distinct brainana pipeline versions found across the loaded files' sidecars. */
   pipelineVersions: string[]
+  /** The longitudinal fit behind an active change map, and the ROI table it came with. */
+  longitudinal: {
+    timepoints: string[]
+    times: Record<string, number>
+    timeSource: string | null
+    timeInterpretable: boolean
+    skipped: Record<string, unknown>
+    roiRates: Array<{ roi: string; hemi: string; measure: string; slope: number; mean: number; spc: number; nTimepoints: number }>
+    agreement: Array<{ timepoint: string; dice: number }>
+  } | null
   files: FileInfo[]
   view: ViewState
   current: { readout: LocationReadout | null; shots: PaneShots | null }

@@ -1,7 +1,7 @@
 // Unit tests for collectFiles (apps/viewer/src/report/generate.ts): which loaded assets earn a card,
 // how sidecar lookups are deduplicated, and where the dataset's pipeline version comes from.
 import assert from 'node:assert/strict'
-import { collectFiles } from '../apps/viewer/src/report/generate.ts'
+import { collectFiles, reportFilename } from '../apps/viewer/src/report/generate.ts'
 
 let passed = 0
 const ok = (name) => {
@@ -122,5 +122,26 @@ assert.equal(noUrl.files.length, 1)
 assert.equal(noUrl.files[0].path, '—')
 assert.deepEqual(noUrl.files[0].generatedBy, [])
 ok('an asset without a URL is described without provenance instead of throwing')
+
+// --- the filename names the scan -----------------------------------------------------------
+// Two reports from two timepoints of one animal are different documents; colliding in a downloads
+// folder would make one silently overwrite the other.
+{
+  const base = { generatedAt: '2026-09-20T11:22:33.000Z', dataset: { subjectId: 'sub-032309m', scan: null } }
+  assert.equal(reportFilename(base), 'brainana-report_sub-032309m_2026-09-20-11-22-33.html')
+
+  const withScan = (id) => reportFilename({ ...base, dataset: { subjectId: 'sub-032309m', scan: { id } } })
+  // The scan id already starts with the subject id, so it is stripped rather than repeated.
+  assert.equal(withScan('sub-032309m_ses-003_long'), 'brainana-report_sub-032309m_ses-003_long_2026-09-20-11-22-33.html')
+  assert.equal(withScan('sub-032309m_base'), 'brainana-report_sub-032309m_base_2026-09-20-11-22-33.html')
+  // A subject-level scan id IS the subject id; nothing is left to add.
+  assert.equal(withScan('sub-032309m'), 'brainana-report_sub-032309m_2026-09-20-11-22-33.html')
+  // Two timepoints must not produce the same name.
+  assert.notEqual(withScan('sub-032309m_ses-001_long'), withScan('sub-032309m_ses-003_long'))
+  // Whatever a scan id contains, the result stays a safe filename.
+  const nasty = reportFilename({ ...base, dataset: { subjectId: 'sub-a', scan: { id: 'sub-a_../../etc/passwd' } } })
+  assert.equal(/[/\\]/.test(nasty), false, 'no path separators survive into the filename')
+  ok('the report filename names the scan, so two timepoints cannot collide')
+}
 
 console.log(`\nreport_generate_test: ${passed} checks passed`)
