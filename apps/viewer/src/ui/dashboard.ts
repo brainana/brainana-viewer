@@ -6,11 +6,12 @@
 import type { RuntimeClient } from '@brainana/core-client/runtimeClient.ts'
 import type { SourceManager } from '@brainana/core-client/sourceManager.ts'
 import type { FilesystemClient, MonkeySummary } from '@brainana/core-client/filesystemClient.ts'
-import type { Manifest, SurfacePair } from '../types.ts'
+import type { Manifest, ScanSummary, SurfacePair } from '../types.ts'
 import { MultiView, MORPH_DEFAULT_COLORMAP, type SurfaceNode, type SurfacePairUrls, type MorphologyDisplay, type MorphologyDisplayMetric, type MorphologyMetric, type MorphologyShapePairs, type CurvatureStyle } from '../niivue/multiView.ts'
 import { Marker } from '@brainana/niivue-kit/marker.ts'
 import { OrientationGizmo } from '@brainana/niivue-kit/orientation.ts'
 import { createViewerStore, type Layout } from '../state/store.ts'
+import { groupScans, sameSpace, hasChoice, scanTooltip, scanPickerTooltip } from '../state/scan.ts'
 import { FOV_MODES, resolveFovMode, fovTooltip, loadFovPreference, saveFovPreference, type FovMode } from '../state/fovMode.ts'
 import { parseAtlasTsv, buildLabelColortable, type AtlasLabel } from '../data/atlas.ts'
 import { ARM_SEED } from '../data/colors.ts'
@@ -215,6 +216,12 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
 
   // --- top bar: two rows (vol row + surf row), surf field aligned under the vol field ---
   const monkeySelect = h('select', { id: 'monkey-select' }, [h('option', { value: '' }, ['select monkey…'])])
+  // Which reconstruction of the selected monkey is on screen. A subject has more than one only
+  // when brainana ran at synthesis_level "session" or "session_longitudinal"; with one it stays
+  // visible but disabled, so "this dataset has a single reconstruction" is distinguishable from
+  // "this build has no scan picker".
+  const scanSelect = h('select', { id: 'scan-select', class: 'narrow', title: scanPickerTooltip(null) }) as HTMLSelectElement
+  scanSelect.disabled = true
   const datasetBtn = h('button', { type: 'button', class: 'primary' }, ['dataset'])
   const volCheck = h('input', { type: 'checkbox' }) as HTMLInputElement
   volCheck.checked = true
@@ -325,7 +332,10 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
     tbDivide(),
     // col 2: Dataset (row 1) · Monkey (row 2)
     h('div', { class: 'tb-cell' }, [datasetBtn]),
-    h('div', { class: 'tb-cell' }, [monkeySelect]),
+    h('div', { class: 'tb-cell' }, [
+      monkeySelect,
+      h('label', { class: 'tb-field inline' }, [h('span', {}, ['scan']), scanSelect]),
+    ]),
     tbDivide(),
     // col 3: vol (row 1) · surf (row 2). LH/RH moved to col 4 row 1 (freed by the underlay rail).
     h('div', { class: 'tb-cell' }, [
@@ -1962,6 +1972,11 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
 
   // The rail's point list. Rebuilt only when the set of rows changes, so a rename cannot detach the
   // edited row's buttons between mousedown and mouseup (see sameBookmarkIds).
+  // What the last clear discarded, so the empty state can say so. Points are coordinates plus
+  // values sampled from one reconstruction, and the scan picker makes clearing them far easier to
+  // trigger than the monkey dropdown ever did -- silently emptying a hand-built list is the kind
+  // of thing that reads as a bug.
+  let clearedFrom: string | null = null
   let renderedPointIds: string[] | null = null
   const renderPoints = (): void => {
     const items = bookmarks.list()
@@ -1970,7 +1985,10 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
     renderedPointIds = ids
     pointList.innerHTML = ''
     if (items.length === 0) {
-      pointList.append(h('p', { class: 'muted point-empty' }, ['No points yet. Use “+ point” to bookmark the crosshair.']))
+      const note = clearedFrom
+        ? `Points from ${clearedFrom} were cleared — a point belongs to the scan it was taken in.`
+        : 'Use “+ point” to bookmark the crosshair.'
+      pointList.append(h('p', { class: 'muted point-empty' }, [`No points yet. ${note}`]))
       return
     }
     items.forEach((bookmark, i) => {
@@ -2019,10 +2037,14 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
   })
 
   // --- subject loading ---
-  // Snapshot of the current view, captured before a monkey switch so the incoming subject restores
-  // the exact same view (camera, overlays, settings) instead of resetting to defaults. Null on the
-  // first-ever load. Goal: "keep the current view, just swap the data" so two monkeys compare 1:1.
+  // Snapshot of the current view, captured before a monkey OR scan switch so the incoming data
+  // restores the exact same view (camera, overlays, settings) instead of resetting to defaults.
+  // Null on the first-ever load. Goal: "keep the current view, just swap the data" so two monkeys
+  // -- or two timepoints of one monkey -- compare 1:1.
   type ViewSnapshot = {
+    // Which reconstruction the snapshot was taken in, so the crosshair is only restored into a
+    // frame where its coordinate still means the same thing.
+    scan: ScanSummary | null
     volumeKey: string | null
     surfaceKind: string | null
     camera: { azimuth: number; elevation: number; scale: number; baseScale: number }
@@ -2118,7 +2140,18 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
     return created
   }
 
-  const loadSubject = async (sourceId: string, subjectId: string): Promise<void> => {
+  // The scan the user last chose, carried across a subject switch by stream when the new subject
+  // has no scan with the same id.
+  let lastScan: ScanSummary | null = null
+  // Latest-wins guard. There used to be exactly one way in here (the monkey dropdown), and
+  // switching monkeys is a slow deliberate act, so overlapping loads were not reachable. The scan
+  // picker is a second, much faster entry point: without this, two runs both mutate `manifest`,
+  // the dropdowns and every panel, and the result is a mix of two reconstructions.
+  let loadRun = 0
+
+  const loadSubject = async (sourceId: string, subjectId: string, wantScanId: string | null = null): Promise<void> => {
+    const run = ++loadRun
+    const stale = () => run !== loadRun
     const label = subjectId.replace(/^sub-/, '')
     showLoading(`Loading ${label}…`)
     // Capture the outgoing view before any state is overwritten, so it can be restored onto the new
@@ -2126,6 +2159,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
     const snap: ViewSnapshot | null =
       view && manifest
         ? {
+            scan: manifest.scan ?? null,
             volumeKey: manifest.volumes[Number(volSelect.value)]?.key ?? null,
             surfaceKind: surfSelect.value || null,
             camera: view.getCamera(),
@@ -2148,13 +2182,31 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
           }
         : null
     try {
-      manifest = (await files.getManifest(sourceId, subjectId)) as unknown as Manifest
+      const fetched = (await files.getManifest(sourceId, subjectId, wantScanId)) as unknown as Manifest
+      if (stale()) return
+      manifest = fetched
       // Bookmarked points are coordinates in THIS subject's space; carrying them across a switch
       // would silently relabel them as points in the incoming subject. Cleared only once the
       // manifest is in hand: a failed fetch leaves the previous subject on screen, and its points
       // must survive with it.
+      // Points are coordinates in the OUTGOING reconstruction's space, carrying values sampled
+      // from its volumes and overlays; keeping them would silently relabel them as points in the
+      // incoming one. True across a scan switch as much as a subject switch -- even between the
+      // base and one of its timepoints, where the frame matches but the values do not.
+      const previous = snap?.scan ?? null
+      clearedFrom =
+        bookmarks.count() > 0
+          ? previous
+            ? `${previous.subjectId.replace(/^sub-/, '')} / ${previous.label}`
+            : 'the previous scan'
+          : null
       bookmarks.clear()
-      store.update({ sourceId, subjectId })
+      renderedPointIds = null
+      // The server resolves an id it does not recognise to the subject's default, so read the
+      // active scan back from the manifest rather than trusting what was asked for.
+      lastScan = manifest.scan ?? null
+      populateScanSelect(manifest)
+      store.update({ sourceId, subjectId, scanId: lastScan?.id ?? null, scanStream: lastScan?.stream ?? null })
 
       // vol dropdown
       volSelect.innerHTML = ''
@@ -2308,8 +2360,12 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
       // Restore the surface camera (zoom + orientation) and the crosshair coordinate, so the switch is
       // a pure data swap. Done last, after all mesh/volume loads that could otherwise reset the camera.
       if (snap) {
+        // The camera is azimuth/elevation/scale, so it is meaningful in any frame. The crosshair
+        // is a coordinate in millimetres, and carrying one into a different reconstruction's frame
+        // lands it somewhere subtly, silently wrong -- worse than not restoring it at all. Only
+        // the base template and its base-seeded timepoints share a frame.
         view!.setCamera(snap.camera)
-        if (snap.crosshairMm) view!.moveCrosshairToWorld(snap.crosshairMm)
+        if (snap.crosshairMm && sameSpace(snap.scan, manifest.scan ?? null)) view!.moveCrosshairToWorld(snap.crosshairMm)
       }
 
       main.classList.add('monkey-loaded')
@@ -2318,6 +2374,28 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
     } catch (err) {
       showError(errorText(err))
     }
+  }
+
+  // Fill the scan picker from the manifest's own roster, grouped so the two families read as two
+  // things rather than one long list: cross-sectional scans each have their own space and are what
+  // the functional stream registered to; longitudinal ones share the base template's mesh.
+  const populateScanSelect = (mf: Manifest): void => {
+    const scans = mf.scans ?? (mf.scan ? [mf.scan] : [])
+    const { cross, longitudinal } = groupScans(scans)
+    scanSelect.innerHTML = ''
+    const addGroup = (label: string, list: ScanSummary[]): void => {
+      if (!list.length) return
+      const group = h('optgroup', { label }) as HTMLOptGroupElement
+      for (const scan of list) {
+        group.append(h('option', { value: scan.id, title: scanTooltip(scan) }, [scan.label]))
+      }
+      scanSelect.append(group)
+    }
+    addGroup('cross-sectional', cross)
+    addGroup('longitudinal', longitudinal)
+    if (mf.scan) scanSelect.value = mf.scan.id
+    scanSelect.disabled = !hasChoice(scans)
+    scanSelect.title = scanPickerTooltip(mf)
   }
 
   // --- monkey dropdown across all sources ---
@@ -2354,7 +2432,21 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
   }
   monkeySelect.addEventListener('change', () => {
     const [sourceId, subjectId] = monkeySelect.value.split('::')
-    if (sourceId && subjectId) void loadSubject(sourceId, subjectId)
+    if (!sourceId || !subjectId) return
+    // Blank the picker while the manifest is in flight: the outgoing subject's sessions must never
+    // be on offer against the incoming one, even briefly.
+    scanSelect.innerHTML = ''
+    scanSelect.append(h('option', { value: '' }, ['loading…']))
+    scanSelect.disabled = true
+    // Deliberately NOT carrying the current scan id: ids are subject-scoped, and the server
+    // (rightly) 404s one that names no reconstruction of the subject asked for. A new subject
+    // opens on its own default scan; the view snapshot still carries the camera and overlays,
+    // which is what makes two subjects comparable.
+    void loadSubject(sourceId, subjectId, null)
+  })
+  scanSelect.addEventListener('change', () => {
+    const [sourceId, subjectId] = monkeySelect.value.split('::')
+    if (sourceId && subjectId && scanSelect.value) void loadSubject(sourceId, subjectId, scanSelect.value)
   })
 
   datasetBtn.addEventListener('click', () =>

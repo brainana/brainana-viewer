@@ -69,8 +69,15 @@ export interface SshHost {
   port?: number
 }
 
-// The manifest shape is broad and consumed structurally by the viewer; keep it open here.
-export type Manifest = Record<string, unknown> & { id: string; label: string; session: string | null }
+// The manifest shape is broad and consumed structurally by the viewer; keep it open here. The few
+// fields named explicitly are the ones this layer or its callers address by name.
+export type Manifest = Record<string, unknown> & {
+  id: string
+  label: string
+  session: string | null
+  scan?: { id: string; stream: string; session: string | null; label: string }
+  scans?: Array<{ id: string; stream: string; session: string | null; label: string }>
+}
 
 // Transport for the remote-browse token: a header, never a query parameter. That token authorises
 // directory listing over a live authenticated SSH connection, so it is the same class of secret as
@@ -90,8 +97,12 @@ export class FilesystemClient {
     return this.#client.apiJson(`${sourceBase(sourceId)}/monkeys`)
   }
 
-  getManifest(sourceId: string, subjectId: string): Promise<Manifest> {
-    return this.#client.apiJson(`${sourceBase(sourceId)}/manifest/${encodeURIComponent(subjectId)}`)
+  // `scanId` selects one of the subject's reconstructions; omitted means the subject's default.
+  // The server matches the id against the set it enumerated, so an id this client invents is a
+  // 404 rather than a different scan silently rendered.
+  getManifest(sourceId: string, subjectId: string, scanId: string | null = null): Promise<Manifest> {
+    const query = scanId ? `?scan=${encodeURIComponent(scanId)}` : ''
+    return this.#client.apiJson(`${sourceBase(sourceId)}/manifest/${encodeURIComponent(subjectId)}${query}`)
   }
 
   listDirectories(sourceId: string, rel = ''): Promise<DirectoryListing> {
