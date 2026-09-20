@@ -8,7 +8,16 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { ensureDerivedAssets } from './freesurfer.mjs'
+import { ensureDerivedAssets, giftiDim0, surfaceVertexCount } from './freesurfer.mjs'
+import {
+  ATLAS_SPACE_ORDER,
+  anatomyPatterns,
+  listViewTargets,
+  resolveFsDir,
+  resolveViewTarget,
+  sessionDirs,
+  summarizeTarget,
+} from './viewTargets.mjs'
 
 // Bundled fallback atlas LUTs shipped with the app (apps/viewer/server/atlas_info/).
 // These apply when a subject's own atlas dir has no per-atlas .tsv sidecar. The content is
@@ -103,16 +112,6 @@ function fullFovStatus(niiPath) {
 // Flexible layout resolution (flat sub-*/anat OR sub-*/ses-*/anat)
 // ---------------------------------------------------------------------------
 
-// List immediate ses-* subdirectories, sorted numerically.
-function sessionDirs(subjectDir) {
-  if (!isDir(subjectDir)) return []
-  return fs
-    .readdirSync(subjectDir, { withFileTypes: true })
-    .filter((e) => e.isDirectory() && /^ses-/.test(e.name))
-    .map((e) => e.name)
-    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }))
-}
-
 // Resolve the anat directory for a subject. Returns { anatDir, session } or null.
 // Prefers a flat sub-*/anat; otherwise the first ses-*/anat that exists.
 export function resolveAnatDir(subjectDir) {
@@ -128,21 +127,6 @@ export function resolveAnatDir(subjectDir) {
 // True when a directory looks like a viewable subject (has anat, flat or session-nested).
 export function isSubjectDir(subjectDir) {
   return path.basename(subjectDir).startsWith('sub-') && resolveAnatDir(subjectDir) != null
-}
-
-// Resolve the FreeSurfer/fastsurfer directory for a subject, tolerant of layout:
-// fastsurfer/<sub>, fastsurfer/<sub>_<ses>, or fastsurfer/<sub>/<ses>. Prefers one
-// that actually contains a surf/ directory.
-function resolveFsDir(outputRoot, subjectId, session) {
-  const base = path.join(outputRoot, 'fastsurfer')
-  const candidates = [
-    path.join(base, subjectId),
-    session ? path.join(base, `${subjectId}_${session}`) : null,
-    session ? path.join(base, subjectId, session) : null,
-  ].filter(Boolean)
-  const withSurf = candidates.find((c) => isDir(path.join(c, 'surf')))
-  if (withSurf) return withSurf
-  return candidates.find((c) => isDir(c)) ?? candidates[0]
 }
 
 // ---------------------------------------------------------------------------
@@ -213,45 +197,141 @@ function buildTemplateManifest(anatFiles, fileUrl) {
 // Manifest
 // ---------------------------------------------------------------------------
 
+// brainana records the run's synthesis level only in the effective config it writes beside the
+// outputs. Read as a display string ONLY -- target enumeration is driven entirely by the tree,
+// because this file is absent from SFTP mirrors and from partially-copied trees, and gating
+// behaviour on it would add a way to be wrong about a tree that is right there on disk.
+// A targeted line match rather than a YAML parse: the repo has no YAML dependency and this is one
+// scalar under a known key.
+const SYNTHESIS_LEVELS = new Set(['subject', 'session', 'session_longitudinal'])
+function readSynthesisLevel(outputRoot) {
+  try {
+    const text = fs.readFileSync(path.join(outputRoot, 'nextflow_reports', 'config.yaml'), 'utf8')
+    const match = text.match(/^\s{2}synthesis_level:\s*["']?([A-Za-z_]+)["']?\s*$/m)
+    return match && SYNTHESIS_LEVELS.has(match[1]) ? match[1] : null
+  } catch {
+    return null
+  }
+}
+
+function readJson(file) {
+  try {
+    return JSON.parse(fs.readFileSync(file, 'utf8'))
+  } catch {
+    return null
+  }
+}
+
+// The longitudinal block for a base/long target. Everything is discovered by globbing the base
+// recon.
+//
+// NOTE: long.change-stats.json also carries `vertex_outputs` and `roi_tables` maps -- do NOT use
+// them. Their values are container-relative ("work/sub-X_base/surf/...") and unresolvable from the
+// host. The files are found on disk instead.
+function buildLongitudinal({ target, derived, fileUrl }) {
+  const baseDir = target.baseDir
+  if (!baseDir) return null
+  // Change maps are offered on the BASE target only. They are one fit across the subject's
+  // timepoints, so showing them while a single timepoint is on screen invites reading them as that
+  // timepoint's rate, which is not a thing. A _long target still gets the timepoint/time-source
+  // context below, just no maps.
+  const offerMaps = target.stream === 'base'
+  const stats = readJson(path.join(baseDir, 'stats', 'long.change-stats.json')) ?? {}
+  const agreementFile = path.join(baseDir, 'scripts', 'base_segmentation_agreement.json')
+  const roiFile = (hemi) => path.join(baseDir, 'stats', `${hemi}.long.roi-rates.csv`)
+  const changeMaps = []
+  for (const key of offerMaps ? Object.keys(derived.longMaps ?? {}) : []) {
+    if (!key.startsWith('lh.')) continue
+    const suffix = key.slice(3)
+    const right = derived.longMaps[`rh.${suffix}`]
+    if (!right) continue // both hemispheres or nothing: a half-pair becomes a 404ing UI option
+    const [measure, stat] = suffix.split('-')
+    changeMaps.push({
+      key: suffix,
+      measure,
+      stat,
+      // rate and spc are signed and want a diverging colormap centred on zero; avg is the plain
+      // temporal mean of the measure.
+      signed: stat === 'rate' || stat === 'spc',
+      left: fileUrl(derived.longMaps[key]),
+      right: fileUrl(right),
+      range: derived.longRanges?.[key] ?? null,
+    })
+  }
+  changeMaps.sort((a, b) => a.key.localeCompare(b.key, undefined, { numeric: true, sensitivity: 'base' }))
+  return {
+    stream: target.stream,
+    baseSubjectId: stats.base_subject_id ?? `${target.subjectId}_base`,
+    timepoints: Array.isArray(stats.timepoints) ? stats.timepoints : [],
+    times: stats.times && typeof stats.times === 'object' ? stats.times : {},
+    // Load-bearing for the UI: when this is not a real time column the fitted rate is per scan,
+    // not per unit time, and a rate is not interpretable without knowing which.
+    timeSource: typeof stats.time_source === 'string' ? stats.time_source : null,
+    skipped: stats.skipped && typeof stats.skipped === 'object' ? stats.skipped : {},
+    ordinalTimeFallback: Array.isArray(stats.ordinal_time_fallback) ? stats.ordinal_time_fallback : [],
+    // Change maps are fitted on the base mesh and published only in the base recon; a _long tree
+    // shares the mesh but carries none of its own.
+    changeMaps,
+    roiRates: {
+      left: offerMaps && exists(roiFile('lh')) ? fileUrl(roiFile('lh')) : null,
+      right: offerMaps && exists(roiFile('rh')) ? fileUrl(roiFile('rh')) : null,
+    },
+    agreement: exists(agreementFile) ? fileUrl(agreementFile) : null,
+  }
+}
+
 // Build the per-subject manifest of /brainana-data URLs.
 //   outputRoot — the data-source root
 //   subjectDir — absolute path to the sub-* directory
 //   fileUrl    — (absPath) => URL string | null, injected by the data source so URLs
 //                are source-scoped; returns null for paths outside the root.
-export function buildManifest({ outputRoot, subjectDir, fileUrl }) {
+export function buildManifest({ outputRoot, subjectDir, fileUrl, targetId = null }) {
   const subjectId = path.basename(subjectDir)
-  const resolved = resolveAnatDir(subjectDir)
-  if (!resolved) throw new Error('Subject has no anat directory')
-  const { anatDir: anat, session } = resolved
+  const { targets, target } = resolveViewTarget({ outputRoot, subjectDir, targetId })
+  if (!target) {
+    // An id that names no reconstruction of this subject. Resolving it to the default instead
+    // would silently show a different scan than the one asked for.
+    const reason = targetId ? `Unknown scan '${targetId}' for ${subjectId}` : 'Subject has no viewable reconstruction'
+    throw Object.assign(new Error(reason), { statusCode: 404 })
+  }
+  const session = target.session
+  const anat = target.anatDir
   const anatFiles = filesIn(anat)
+  const warnings = []
   // Pick ONE atlas space directory, preferring the space that matches the display base. The default
   // slice base is the FreeSurfer norm.mgz (fsnative), so an fsnative-space atlas overlay is
   // voxel-aligned to it and needs no resample; T1w/scanner are ordered fallbacks for older runs.
   // ALL volume-side assets (label volume, .tsv LUT, retino/somato functional volumes) come from
   // this single chosen dir — no per-file cross-space fallback. (Surface .func.gii overlays are
   // fsnative-only by nature and are resolved separately below.)
-  const fsnativeAtlas = path.join(anat, 'atlas_space-fsnative')
-  const t1Atlas = path.join(anat, 'atlas_space-T1w')
-  const scannerAtlas = path.join(anat, 'atlas_space-scanner')
+  // The atlas directories all hang off the TARGET's atlas anat dir: the session's own anat for a
+  // cross-sectional scan, the subject-level anat for base/long (whose atlas_space-fsnative is the
+  // BASE mesh's projection, not any session's). Priority is per stream -- base/long prefer
+  // atlas_space-base, which is the frame their volumes and surfaces are in.
+  const atlasSpaceDir = (space) => path.join(target.atlasAnatDir, `atlas_space-${space}`)
+  const fsnativeAtlas = atlasSpaceDir('fsnative')
   const hasAtlasVolume = (dir) => filesIn(dir).some((f) => /^atlas-[^_]+_space-.*\.nii\.gz$/i.test(path.basename(f)))
-  const atlasDir = [fsnativeAtlas, t1Atlas, scannerAtlas].find(hasAtlasVolume) ?? t1Atlas
+  const spaceOrder = ATLAS_SPACE_ORDER[target.stream] ?? ATLAS_SPACE_ORDER.cross
+  const atlasDir = spaceOrder.map(atlasSpaceDir).find(hasAtlasVolume) ?? atlasSpaceDir('T1w')
   const atlasFiles = filesIn(atlasDir)
-  const anatomy = pick(anatFiles, [
-    /space-T1w_desc-preproc_T1w_brain\.nii\.gz$/i,
-    /space-T1w_desc-preproc_T1w\.nii\.gz$/i,
-    /desc-preproc_T1w\.nii\.gz$/i,
-    /desc-preproc_brain\.nii\.gz$/i,
-    /space-scanner_T1w\.nii\.gz$/i,
-  ])
+  const anatomy = pick(anatFiles, anatomyPatterns(target.stream))
   const fullFovNii = pickFullFov(anatFiles)
-  const fsDir = resolveFsDir(outputRoot, subjectId, session)
+  const fsDir = target.fsDir
   const surfDir = path.join(fsDir, 'surf')
-  const derived = ensureDerivedAssets(outputRoot, subjectId, fsDir)
+  // Cache per RECONSTRUCTION, not per subject: two sessions of one subject have different meshes.
+  // Derived from fsDir so a pre-v3 tree (fastsurfer/sub-X) keeps its existing cache directory
+  // name -- which is what stops the committed datasets/demo_viewer cache from being orphaned.
+  const fsRel = path.relative(path.join(outputRoot, 'fastsurfer'), fsDir)
+  const cacheKey = fsRel && !fsRel.startsWith('..') ? fsRel.split(path.sep).join('_') : subjectId
+  const derived = ensureDerivedAssets(outputRoot, fsDir, { cacheKey, baseDir: target.baseDir })
 
   // Selectable base volumes: the preprocessed T1w plus the FreeSurfer mri/*.mgz volumes.
   const mriDir = path.join(fsDir, 'mri')
   const volumes = []
-  if (anatomy) volumes.push({ key: 'anat', label: 'T1w (preproc)', url: fileUrl(anatomy) })
+  // The base/long streams' anat dir holds the base template, not a preprocessed scan of the
+  // animal -- label it for what it is so it is not mistaken for this timepoint's own image.
+  const anatomyLabel = /_space-base_desc-brain_T1w\.nii\.gz$/i.test(anatomy ?? '') ? 'T1w (base template)' : 'T1w (preproc)'
+  if (anatomy) volumes.push({ key: 'anat', label: anatomyLabel, url: fileUrl(anatomy) })
   if (isDir(mriDir)) {
     for (const name of fs
       .readdirSync(mriDir)
@@ -265,10 +345,27 @@ export function buildManifest({ outputRoot, subjectDir, fileUrl }) {
   // space, so these are always read from atlas_space-fsnative regardless of which space the atlas
   // VOLUME was chosen from above; null (no surface layer) when that dir is absent.
   const fsnativeFiles = filesIn(fsnativeAtlas)
+  // Vertex counts of this target's own mesh, read from a fixed-size header. A subject's base and
+  // cross-sectional reconstructions have DIFFERENT vertex counts (11597 vs 11725 on the dev-test
+  // subject), so an overlay from the wrong reconstruction is not a subtle misalignment -- it is an
+  // array of the wrong length. There is deliberately no cross-directory fallback anywhere in this
+  // function; this guard catches the remaining case of a stale overlay beside a re-run recon.
+  const meshVertices = { lh: surfaceVertexCount(surfDir, 'lh'), rh: surfaceVertexCount(surfDir, 'rh') }
+  const vertexMismatch = (file, hemi) => {
+    const expected = meshVertices[hemi]
+    if (expected == null) return false
+    const actual = giftiDim0(file)
+    return actual != null && actual !== expected
+  }
   const surfacePairFor = (base) => {
     const l = pick(fsnativeFiles, [new RegExp(`${base}_space-fsnative_hemi-L.*\\.func\\.gii$`, 'i')])
     const r = pick(fsnativeFiles, [new RegExp(`${base}_space-fsnative_hemi-R.*\\.func\\.gii$`, 'i')])
-    return l && r ? { left: fileUrl(l), right: fileUrl(r) } : null
+    if (!l || !r) return null
+    if (vertexMismatch(l, 'lh') || vertexMismatch(r, 'rh')) {
+      warnings.push(`${base}: surface overlay vertex count does not match this reconstruction's mesh; overlay hidden`)
+      return null
+    }
+    return { left: fileUrl(l), right: fileUrl(r) }
   }
 
   // Each atlas: its label volume + the .tsv LUT sidecar (may be absent) + the precomputed surface
@@ -328,7 +425,16 @@ export function buildManifest({ outputRoot, subjectDir, fileUrl }) {
   return {
     id: subjectId,
     label: subjectId.replace(/^sub-/, ''),
+    // Kept for every existing consumer (the report header, the dashboard's dataset block). For a
+    // pre-v3 tree this is the same value it always was.
     session,
+    // Which reconstruction this manifest describes, and the full roster for this subject so the
+    // scan picker can be populated without a second request.
+    scan: summarizeTarget(target),
+    scans: targets.map(summarizeTarget),
+    synthesisLevel: readSynthesisLevel(outputRoot),
+    warnings,
+    longitudinal: buildLongitudinal({ target, derived, fileUrl }),
     relativePath: path.relative(outputRoot, subjectDir),
     anatomy: fileUrl(anatomy),
     volumes,
@@ -387,4 +493,4 @@ export function buildManifest({ outputRoot, subjectDir, fileUrl }) {
 // The Viewer-domain manifest provider — the strategy a core DataSource is given so it can
 // discover subjects and build manifests without core importing this (brainana-specific) module.
 // A future Aligner/Editor supplies its own provider with the same shape.
-export const viewerManifestProvider = { isSubjectDir, resolveAnatDir, buildManifest }
+export const viewerManifestProvider = { isSubjectDir, resolveAnatDir, buildManifest, listViewTargets }
