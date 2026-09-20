@@ -754,3 +754,26 @@ input.slider-num { flex: 0 0 auto; width: var(--num-w); padding: 0 var(--sp-1); 
 .report-filename { margin: var(--sp-3) 0 0; }
 .report-folder { color: var(--muted); font-family: var(--mono); font-size: var(--fs-1);
   overflow-wrap: anywhere; }
+
+/* --- longitudinal change panel --------------------------------------------------------------
+   The time-source note is pinned above the pickers and cannot be dismissed: when brainana had no
+   real time column the values are a change per scan, and nothing about the rendered map says so. */
+.panel-note { font-size: var(--fs-sm); line-height: 1.45; margin: 0 0 var(--sp-3); }
+.panel-note p { margin: 0 0 var(--sp-2); }
+.panel-note p:last-child { margin-bottom: 0; }
+.panel-note.muted { color: var(--muted); }
+.panel-note.warn {
+  color: var(--text);
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  border-left: 3px solid var(--warn);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--r-xs);
+}
+.panel-group.agreement { margin-top: var(--sp-3); font-size: var(--fs-sm); }
+.panel-group.agreement > summary { cursor: pointer; color: var(--muted); }
+.agreement-value { color: var(--text); }
+.agreement-value.warn { color: var(--warn); }
+.agreement-note { color: var(--warn); margin: var(--sp-2) 0; }
+.agreement-rows { margin-top: var(--sp-2); }
+.agreement-row { display: flex; justify-content: space-between; gap: var(--sp-3); padding: 1px 0; color: var(--muted); }
+.agreement-row .num { font-family: var(--mono); color: var(--text); }

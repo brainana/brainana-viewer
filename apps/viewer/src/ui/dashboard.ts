@@ -15,13 +15,15 @@ import { groupScans, sameSpace, hasChoice, scanTooltip, scanPickerTooltip } from
 import { FOV_MODES, resolveFovMode, fovTooltip, loadFovPreference, saveFovPreference, type FovMode } from '../state/fovMode.ts'
 import { parseAtlasTsv, buildLabelColortable, type AtlasLabel } from '../data/atlas.ts'
 import { ARM_SEED } from '../data/colors.ts'
-import { finiteExtrema, createFunctionalSurfaceLut, quantizeFunctionalSurfaceValues, maskSurfaceBinsByF, maskSurfaceBinsByValue, type SurfaceFunctionMode } from '../data/functional.ts'
+import { finiteExtrema, createFunctionalSurfaceLut, quantizeFunctionalSurfaceValues, maskSurfaceBinsByF, maskSurfaceBinsByValue, maskSurfaceBinsByMagnitude, quantizeScalarToBins, type SurfaceFunctionMode } from '../data/functional.ts'
 import { visualFieldStats } from '../data/visualField.ts'
 import { parseGiftiFloat32 } from '../data/gifti.ts'
 import { RoiLegend } from './roiLegend.ts'
 import { createAtlasPanel, type AtlasPanel, type AtlasSelection } from './panels/atlas.ts'
 import { createFunctionPanel, choiceKey, type FunctionPanel, type FunctionChoice } from './panels/function.ts'
 import { createMorphologyPanel, type MorphologyPanel, type MarkerMode } from './panels/morphology.ts'
+import { createLongitudinalPanel, changeKey, hasChangeMaps, type LongitudinalPanel, type ChangeChoice } from './panels/longitudinal.ts'
+import { symmetricRobustRange, robustRange, rateUnitLabel, parseSegmentationAgreement } from '../data/longitudinal.ts'
 import { drawVisualField } from './visualFieldPlot.ts'
 import { h, errorText, selectField, asyncHandler } from '@brainana/ui/dom.ts'
 import { createSlider } from '@brainana/ui/components/slider.ts'
@@ -168,7 +170,7 @@ const LAYOUTS: Array<{ k: Layout; icon: SVGSVGElement; title: string }> = [
 ]
 // Only the wired category tabs are shown. Imported/Import/Export are deferred Phase-3 work and
 // were previously rendered permanently-disabled (reading as broken) — hidden until implemented.
-const PANEL_BUTTONS = ['atlas', 'morphology', 'func map']
+const PANEL_BUTTONS = ['atlas', 'morphology', 'func map', 'change']
 // Camera view presets shown in the surf row (Req 4). Lateral/Medial are hemisphere-aware.
 const VIEW_PRESETS: Array<{ k: 'lateral' | 'medial' | 'ventral' | 'dorsal' | 'anterior' | 'posterior'; label: string }> = [
   { k: 'lateral', label: 'lat' },
@@ -389,6 +391,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
   // Function/morphology side-content slots carry no caption — the active selection is already shown
   // by the highlighted chip in the docked panel above, so a descriptive caption is redundant.
   const funcSlot = h('div', { class: 'side-slot', hidden: true })
+  const changeSlot = h('div', { class: 'side-slot', hidden: true })
   const morphSlot = h('div', { class: 'side-slot', hidden: true })
   const sidePlaceholder = h('div', { class: 'legend-title muted' }, ['Select atlas, morphology, or function above.'])
   const sideContent = h('div', { class: 'side-content' }, [legendSlot, funcSlot, morphSlot, sidePlaceholder])
@@ -900,9 +903,10 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
   // the visible content slot). Atlas and Function are mutually-exclusive overlays; Morphology is an
   // always-on base underlay, so its tab leaves the active overlay untouched. `lastAtlasSel` /
   // `lastFuncChoice` remember each overlay's selection so re-entering its tab restores it.
-  let dockedTab: 'atlas' | 'morphology' | 'function' | null = null
+  let dockedTab: 'atlas' | 'morphology' | 'function' | 'longitudinal' | null = null
   let lastAtlasSel: AtlasSelection | null = null
   let lastFuncChoice: FunctionChoice | null = null
+  let lastChangeChoice: ChangeChoice | null = null
 
   function applyHidden(hidden: Set<number>): void {
     if (!view || atlasEntries.length === 0) return
@@ -1155,6 +1159,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
 
   // --- function state (retinotopy / somatotopy) ---
   let functionPanel: FunctionPanel | null = null
+  let longPanel: LongitudinalPanel | null = null
   let funcChoice: FunctionChoice | null = null
   let funcThreshold = 0
   let funcOpacity = 1
@@ -1173,7 +1178,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
   let colormapInfos: ColormapInfo[] = []
   // The unified bottom "Color display" section + which overlay it currently targets.
   let colorDisplay: ColorDisplay | null = null
-  type ColorTarget = 'morphology' | 'function' | 'atlas' | null
+  type ColorTarget = 'morphology' | 'function' | 'atlas' | 'longitudinal' | null
   // Atlas overlay colormap: null = the categorical label table; a key = a continuous colormap (the
   // default for float scalar atlases like CortHierarchy, or forced onto a parcellation via the
   // picker). The synthetic 'labels' picker entry restores the categorical table.
@@ -1427,6 +1432,120 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
     infoResizer.addEventListener('pointercancel', end)
   }
 
+  // --- longitudinal change maps -------------------------------------------------------------
+  // A change map is a per-vertex scalar on the base mesh, painted through the SAME surface layer
+  // slot as the functional map (see MultiView.setChangeSurface for why). It therefore needs the
+  // same single-flight discipline: two overlapping applies race on that one layer and leave the
+  // surface black.
+  let changeChoice: ChangeChoice | null = null
+  let changeOpacity = 1
+  let changeThreshold = 0
+  let changeToken = 0
+  // Decoded per-vertex values, keyed by map. Feeds the display window, the quantizer AND the
+  // crosshair readout from one array, so the colour and the reported number cannot disagree.
+  const changeValues = new Map<string, [Float32Array, Float32Array]>()
+
+  const changeMapFor = (choice: ChangeChoice | null) =>
+    choice ? (manifest?.longitudinal?.changeMaps.find((m) => m.key === changeKey(choice)) ?? null) : null
+
+  const loadChangeValues = async (key: string, left: string, right: string): Promise<[Float32Array, Float32Array] | null> => {
+    const cached = changeValues.get(key)
+    if (cached) return cached
+    try {
+      const [l, r] = await Promise.all(
+        [left, right].map((url) =>
+          client
+            .apiFetch(url)
+            .then((x) => x.text())
+            .then((t) => parseGiftiFloat32(t)[0]),
+        ),
+      )
+      if (!l || !r) return null
+      const pair: [Float32Array, Float32Array] = [l, r]
+      changeValues.set(key, pair)
+      return pair
+    } catch {
+      return null
+    }
+  }
+
+  // Signed maps get a diverging colormap so the neutral colour reads as "no change"; the unsigned
+  // temporal mean is an ordinary sequential quantity. Either can be overridden from the colour dock.
+  let changeColormap: string | null = null
+  const changeColormapKey = (): string => changeColormap ?? (changeMapFor(changeChoice)?.signed ? 'bwr' : 'viridis')
+
+  // The display window: symmetric for a signed map so zero lands on the diverging colormap's
+  // neutral colour, one-sided for the unsigned temporal mean.
+  const changeWindow = (values: [Float32Array, Float32Array], signed: boolean): { min: number; max: number } =>
+    signed ? symmetricRobustRange(values) : robustRange(values)
+
+  const applyChangeSurface = async (): Promise<void> => {
+    if (!view) return
+    const map = changeMapFor(changeChoice)
+    if (!map) {
+      view.clearChangeSurface()
+      return
+    }
+    const token = ++changeToken
+    const values = await loadChangeValues(map.key, map.left, map.right)
+    if (token !== changeToken || !values) return
+    const window = changeWindow(values, map.signed)
+    const cmapLut = colormapLuts[changeColormapKey()] ?? view.colormapLut(changeColormapKey())
+    if (!cmapLut) {
+      // No fallback ramp here on purpose. The functional overlay can fall back to its built-in
+      // retinotopy ramp because that ramp IS its natural colouring; borrowing it for a signed
+      // change map would put a cyclic hue wheel on a diverging quantity, which reads as structure
+      // that is not there. Showing nothing is the honest failure.
+      view.clearChangeSurface()
+      return
+    }
+    const lut = surfaceLutFromColormap(cmapLut, 1).lut
+    const binsFor = (v: Float32Array): Float32Array =>
+      maskSurfaceBinsByMagnitude(quantizeScalarToBins(v, window.min, window.max), v, changeThreshold)
+    await view.setChangeSurface(map.key, { left: map.left, right: map.right }, binsFor(values[0]), binsFor(values[1]), lut, changeOpacity)
+  }
+
+  // brainana's own diagnostic on whether segmenting a robust average shifted the CNN's input
+  // domain. Best-effort: it is context for the change maps, never a gate on showing them.
+  const loadAgreement = async (mf: Manifest): Promise<void> => {
+    const url = mf.longitudinal?.agreement
+    if (!url) {
+      longPanel?.setAgreement([])
+      return
+    }
+    try {
+      const rows = parseSegmentationAgreement(await client.apiFetch(url).then((r) => r.json()))
+      longPanel?.setAgreement(rows)
+    } catch {
+      longPanel?.setAgreement([])
+    }
+  }
+
+  const selectChange = async (choice: ChangeChoice | null): Promise<void> => {
+    changeChoice = changeMapFor(choice) ? choice : null
+    if (changeChoice) lastChangeChoice = changeChoice
+    longPanel?.setActive(changeChoice ? changeKey(changeChoice) : null)
+    if (!changeChoice) {
+      view?.clearChangeSurface()
+      refreshColorDisplay()
+      updateSurfaceReport()
+      return
+    }
+    const map = changeMapFor(changeChoice)
+    // Seed the threshold slider from the data actually loaded, not from a guess: a rate is ~0.01,
+    // so a fixed 0..1 slider would be unusable.
+    if (map) {
+      const values = await loadChangeValues(map.key, map.left, map.right)
+      if (values) {
+        const window = changeWindow(values, map.signed)
+        longPanel?.setThresholdBounds(Math.max(Math.abs(window.min), Math.abs(window.max)), changeThreshold)
+      }
+    }
+    await applyChangeSurface()
+    refreshColorDisplay()
+    updateSurfaceReport()
+  }
+
   // --- surface report (morphology at the crosshair vertex) ---
   let lastMm: [number, number, number] | null = null
   const morphShape: { curvature?: [Float32Array, Float32Array]; sulc?: [Float32Array, Float32Array]; thickness?: [Float32Array, Float32Array] } = {}
@@ -1439,6 +1558,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
   // Which overlay the bottom color-display section targets, following the docked tab + selection.
   const colorTarget = (): ColorTarget => {
     if (dockedTab === 'function' && funcChoice) return 'function'
+    if (dockedTab === 'longitudinal' && changeChoice) return 'longitudinal'
     if (dockedTab === 'morphology' && morphColorable()) return 'morphology'
     if (dockedTab === 'atlas' && lastAtlasSel != null) return 'atlas'
     return null
@@ -1473,6 +1593,29 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
         // parts so the numbers read as anatomy. Retinotopy uses wheel/rings legends (no bar ticks).
         barTicks: funcChoice.kind === 'somatotopy' ? ['foot', 'hand', 'face'] : undefined,
         colormaps: colormapInfos.filter((i) => i.key !== LABELS_KEY), // "labels" is atlas-only
+      })
+    } else if (target === 'longitudinal' && changeChoice) {
+      const map = changeMapFor(changeChoice)
+      const key = changeColormapKey()
+      const values = changeValues.get(changeKey(changeChoice))
+      const window = values && map ? changeWindow(values, map.signed) : { min: -1, max: 1 }
+      const unit = map ? rateUnitLabel(manifest?.longitudinal ?? null, map) : ''
+      colorDisplay.setTarget({
+        title: `change · ${changeChoice.measure} ${changeChoice.statistic}${unit ? ` (${unit})` : ''}`,
+        colormap: key,
+        legendShape: 'bar',
+        gradient: colormapGradients[key] ?? FALLBACK_GRADIENT,
+        lut: colormapLuts[key],
+        displayDomain: window,
+        displayRange: window,
+        // No clip control: this dock's clip KEEPS what is inside [lo, hi], and thresholding a
+        // signed change map needs the complement -- hide the near-zero middle, keep both tails.
+        // That lives on the panel's own "|change| >=" slider instead.
+        clip: 'none',
+        // A signed map's bar is anchored at its neutral middle, so the reader is told what the
+        // centre colour means rather than inferring it from two numeric endpoints.
+        barTicks: map?.signed ? ['decrease', 'no change', 'increase'] : undefined,
+        colormaps: colormapInfos.filter((i) => i.key !== LABELS_KEY),
       })
     } else if (target === 'morphology') {
       const metric = morphActiveMetric()
@@ -1533,6 +1676,10 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
       if (t === 'function') {
         funcColormap = key
         applyFunctionColor()
+      } else if (t === 'longitudinal') {
+        changeColormap = key
+        void applyChangeSurface()
+        refreshColorDisplay()
       } else if (t === 'morphology') {
         morphColormaps[morphActiveMetric()] = key
         view?.applyMorphologyDisplay(morphDisplay())
@@ -1681,6 +1828,18 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
       ['sulcal depth', num(morph?.sulc ?? NaN)],
       ['thickness (mm)', num(morph?.thickness ?? NaN)],
     ]
+    // The active change map reads out at the same vertex, from the SAME array that produced the
+    // colour on screen -- so the number and the picture cannot disagree. The unit is part of the
+    // row label, never optional: a per-scan value labelled only "rate" is exactly the misreading
+    // the whole time-source machinery exists to prevent.
+    const changeMap = changeMapFor(changeChoice)
+    if (changeMap && vertex) {
+      const values = changeValues.get(changeMap.key)
+      const hemi = currentNode.hemi === 0 ? 0 : 1
+      const value = values?.[hemi]?.[vertex.index]
+      const unit = rateUnitLabel(manifest?.longitudinal ?? null, changeMap)
+      rows.push([`${changeMap.measure} ${changeMap.statistic}${unit ? ` (${unit})` : ''}`, num(value ?? NaN)])
+    }
     el.innerHTML = ''
     el.append(dlRows(rows))
   }
@@ -1689,17 +1848,25 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
   const atlasBtn = panelBtns[PANEL_BUTTONS.indexOf('atlas')]
   const morphBtn = panelBtns[PANEL_BUTTONS.indexOf('morphology')]
   const functionBtn = panelBtns[PANEL_BUTTONS.indexOf('func map')]
+  // Hidden rather than disabled: change maps exist only on the base template of a longitudinal
+  // run, so for most scans this tab would be permanently greyed out, which is noise. It is last in
+  // the row, so hiding it shifts nothing.
+  const changeBtn = panelBtns[PANEL_BUTTONS.indexOf('change')]
+  changeBtn.hidden = true
 
   // Reflect the docked tab in the button highlight, the docked picker, and the content slot.
   const updateTabUI = (): void => {
     atlasBtn.classList.toggle('active', dockedTab === 'atlas')
     morphBtn.classList.toggle('active', dockedTab === 'morphology')
     functionBtn.classList.toggle('active', dockedTab === 'function')
+    changeBtn.classList.toggle('active', dockedTab === 'longitudinal')
     if (atlasPanel) atlasPanel.element.hidden = dockedTab !== 'atlas'
     if (morphPanel) morphPanel.element.hidden = dockedTab !== 'morphology'
     if (functionPanel) functionPanel.element.hidden = dockedTab !== 'function'
+    if (longPanel) longPanel.element.hidden = dockedTab !== 'longitudinal'
     legendSlot.hidden = dockedTab !== 'atlas'
     funcSlot.hidden = dockedTab !== 'function'
+    changeSlot.hidden = dockedTab !== 'longitudinal'
     morphSlot.hidden = dockedTab !== 'morphology'
     sidePlaceholder.hidden = dockedTab !== null
     refreshColorDisplay() // the bottom color-display section follows the docked tab's overlay
@@ -1709,21 +1876,32 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
   // selection is remembered, so re-entering restores it). Morphology is the always-on base layer, so
   // its tab leaves the active overlay alone — only the docked controls swap. Re-clicking the docked
   // tab toggles it off (an atlas/function overlay is cleared back to the bare morphology base).
-  const selectTab = (tab: 'atlas' | 'morphology' | 'function'): void => {
+  const selectTab = (tab: 'atlas' | 'morphology' | 'function' | 'longitudinal'): void => {
     if (dockedTab === tab) {
       dockedTab = null
       if (tab === 'atlas') void selectAtlas(null)
       else if (tab === 'function') void selectFunction(null)
+      else if (tab === 'longitudinal') void selectChange(null)
       updateTabUI()
       return
     }
     dockedTab = tab
+    // Atlas, function and change are three ways of painting the same surface, so entering any one
+    // clears the other two. For change that is not merely tidiness: it shares the function map's
+    // layer slot, and an atlas overlay fills every cortical vertex at full opacity anyway, so
+    // "atlas + change" would render as "change" with extra loading.
     if (tab === 'atlas') {
       void selectFunction(null) // hide the function overlay (keeps lastFuncChoice)
+      void selectChange(null)
       void selectAtlas(lastAtlasSel) // restore the atlas overlay
     } else if (tab === 'function') {
       void selectAtlas(null) // hide the atlas overlay (keeps lastAtlasSel)
+      void selectChange(null)
       void selectFunction(lastFuncChoice) // restore the function overlay
+    } else if (tab === 'longitudinal') {
+      void selectAtlas(null)
+      void selectFunction(null)
+      void selectChange(lastChangeChoice)
     }
     // morphology: overlay unchanged — the base persists under any active atlas/function overlay.
     updateTabUI()
@@ -1732,6 +1910,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
   atlasBtn.addEventListener('click', () => selectTab('atlas'))
   morphBtn.addEventListener('click', () => selectTab('morphology'))
   functionBtn.addEventListener('click', () => selectTab('function'))
+  changeBtn.addEventListener('click', () => selectTab('longitudinal'))
 
   // Atlas report: every discovered atlas at the crosshair (sampled from report-only volumes).
   let reportSpecs: Array<{ key: string; label: string; byId: Map<number, AtlasLabel> }> = []
@@ -2049,7 +2228,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
     surfaceKind: string | null
     camera: { azimuth: number; elevation: number; scale: number; baseScale: number }
     crosshairMm: [number, number, number] | null
-    dockedTab: 'atlas' | 'morphology' | 'function' | null
+    dockedTab: 'atlas' | 'morphology' | 'function' | 'longitudinal' | null
     // The overlay actually painted on the surface right now (at most one of atlas/function); plus the
     // "remembered" selections for tab toggling, restored best-effort.
     activeOverlay: 'atlas' | 'function' | null
@@ -2323,6 +2502,29 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
         { opacity: funcOpacity, brightness: funcBrightness },
       )
       sidePicker.append(functionPanel.element)
+
+      // --- longitudinal change maps (base template scans only) ---
+      longPanel = createLongitudinalPanel(
+        manifest,
+        {
+          onSelect: (choice) => void selectChange(choice),
+          onThreshold: (v) => {
+            changeThreshold = v
+            void applyChangeSurface()
+            updateSurfaceReport()
+          },
+          onOpacity: (v) => {
+            changeOpacity = v
+            void applyChangeSurface()
+          },
+        },
+        { opacity: changeOpacity },
+      )
+      sidePicker.append(longPanel.element)
+      changeBtn.hidden = !hasChangeMaps(manifest)
+      // A scan without change maps cannot stay docked on a tab that no longer exists.
+      if (!hasChangeMaps(manifest) && dockedTab === 'longitudinal') dockedTab = null
+      void loadAgreement(manifest)
       // Restore the remembered function map if this subject has the same map kind; else clear. Pass the
       // snapshot settings THROUGH selectFunction (single surface pass) for an exact "carry over" match.
       lastFuncChoice = snap?.lastFuncChoice ? functionPanel.getChoice(choiceKey(snap.lastFuncChoice)) : null
