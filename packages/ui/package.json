@@ -1,6 +1,6 @@
 {
   "name": "@brainana/ui",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "description": "Shared, framework-free UI layer for brainana vis tools: the design-token theme (theme.css + self-hosted fonts), the h() DOM helper, and generic components (colorbar, slider, range control, legend). No domain knowledge.",

@@ -1,6 +1,6 @@
 {
   "name": "@brainana/core-server",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "description": "Tool-agnostic local HTTP runtime: loopback bind + session-token guard, DataSource registry (local + SFTP), remote cache, atomic export. Domain manifest logic is injected, never imported.",

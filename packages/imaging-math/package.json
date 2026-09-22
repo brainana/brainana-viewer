@@ -1,6 +1,6 @@
 {
   "name": "@brainana/imaging-math",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "description": "Pure, framework-free imaging math shared by brainana vis tools (ROI warp, volume→surface projection). No DOM/NiiVue — headless-testable.",

@@ -8,6 +8,13 @@ import { sidecarUrl, displayPath, parseGeneratedBy, brainanaVersion, fetchGenera
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
+// The brainana version the committed demo dataset was produced by. Pinned rather than read back
+// from the file under test, which would make the assertion tautological. Rebuilding the demo from
+// a newer pipeline run moves this one line -- scripts/build-demo-dataset.mjs prints the version it
+// found so a mismatch is caught at build time rather than as a puzzling test failure.
+const DEMO_BRAINANA_VERSION = '3.0.0'
+
+
 let passed = 0
 const ok = (name) => {
   passed++
@@ -64,8 +71,8 @@ const real = JSON.parse(
   fs.readFileSync(path.join(repoRoot, 'datasets/demo_viewer/sub-example/ses-001/anat/atlas_space-fsnative/atlas-D99_space-fsnative_sub-example_ses-001.json'), 'utf8'),
 )
 const entries = parseGeneratedBy(real)
-assert.deepEqual(entries, [{ name: 'brainana', version: '1.3.0' }])
-assert.equal(brainanaVersion(entries), '1.3.0')
+assert.deepEqual(entries, [{ name: 'brainana', version: DEMO_BRAINANA_VERSION }])
+assert.equal(brainanaVersion(entries), DEMO_BRAINANA_VERSION)
 ok('parses GeneratedBy from a real demo-dataset sidecar')
 
 // Tolerate the field being a bare object, and entries missing a version or a name.
@@ -83,7 +90,7 @@ ok('absent/foreign provenance yields no brainana version')
 
 // --- fetch contract: best-effort, never rejects ---
 const okRes = (body) => ({ ok: true, json: async () => body })
-assert.deepEqual(await fetchGeneratedBy(async () => okRes(real), '/brainana-data/s/a/x.nii.gz'), [{ name: 'brainana', version: '1.3.0' }])
+assert.deepEqual(await fetchGeneratedBy(async () => okRes(real), '/brainana-data/s/a/x.nii.gz'), [{ name: 'brainana', version: DEMO_BRAINANA_VERSION }])
 assert.deepEqual(await fetchGeneratedBy(async () => ({ ok: false }), '/brainana-data/s/a/x.nii.gz'), [], '404 sidecar')
 assert.deepEqual(
   await fetchGeneratedBy(async () => ({ ok: true, json: async () => { throw new SyntaxError('bad json') } }), '/brainana-data/s/a/x.nii.gz'),

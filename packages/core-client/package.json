@@ -1,6 +1,6 @@
 {
   "name": "@brainana/core-client",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "description": "Framework-agnostic browser platform layer shared by brainana tools: token-authed runtime client, source manager, filesystem client, session persistence, export destinations, browser capability gate.",

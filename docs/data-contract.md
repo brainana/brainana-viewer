@@ -13,9 +13,17 @@ sidecars, QC `figures/`, the `func/` BOLD series, `nextflow_reports/`, most Free
 intermediates) is ignored.
 
 > **Concrete example.** [`datasets/demo_viewer/`](../datasets/demo_viewer/) is a committed,
-> minimal real instance of this contract — the `sub-example` subject trimmed to exactly the
-> files below (intermediates and the regenerable cache omitted). Use it to see the layout in
-> practice or to launch the Viewer without your own data.
+> minimal real instance of this contract — the `sub-example` subject from a **brainana 3.0.0**
+> run, trimmed to exactly the files below (intermediates and the regenerable cache omitted). Use
+> it to see the layout in practice or to launch the Viewer without your own data.
+>
+> It is a `synthesis_level: subject` tree, so it has one reconstruction: it exercises the atlas,
+> surface and report paths, not the scan picker or the change tab.
+>
+> The trim is not prose — [`scripts/build-demo-dataset.mjs`](../scripts/build-demo-dataset.mjs)
+> *is* the selection, and rebuilds the tree from any brainana output root:
+> `node scripts/build-demo-dataset.mjs --from <root>`. Re-running it against the committed tree
+> changes nothing, which is how you check the two have not drifted.
 
 ## Expected layout
 
