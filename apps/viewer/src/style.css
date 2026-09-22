@@ -21,21 +21,62 @@ body {
 #app { height: 100dvh; display: flex; flex-direction: column; }
 
 /* ---------- top bar ---------- */
-/* 2-row × 4-column grid; children are appended column-major (grid-auto-flow: column). */
+/* A wrapping row of self-contained CLUSTERS (`.tb-group`), each its own 2-row grid. The bar used to
+   be one big 2-row grid filled column-major, which let individual controls re-wrap inside their
+   cell: at the default 1440px window the four category tabs split 3 + 1 across two lines. Clusters
+   are atomic instead — when width runs out a whole cluster drops to the next bar row, so a button
+   group is never cut in half and nothing is ever clipped. See docs/design_guideline/layout-density.md. */
 .toolbar {
-  display: grid; grid-template-rows: auto auto; grid-auto-flow: column;
-  justify-content: start; align-items: center; column-gap: var(--sp-6); row-gap: 2px;
-  padding: 5px var(--sp-6); border-bottom: 1px solid var(--border);
+  --tb-gap: var(--sp-6);       /* separation between clusters; tightened at the compact tier below */
+  --tb-pad-y: 5px;             /* the bar's vertical padding — cluster hairlines bleed into it */
+  --tb-mode-w: 118px;          /* marker placement-mode select; narrowed at the compact tier */
+  --tb-layer-name-w: 3.25ch;   /* fits "surf"; keeps vol/surf selects column-aligned */
+  --tb-layer-select-w: calc(96px * 0.8); /* vol/surf layer picks; narrower than default narrow */
+  display: flex; flex-wrap: wrap; align-items: stretch;
+  column-gap: var(--tb-gap); row-gap: var(--sp-1);
+  padding: var(--tb-pad-y) var(--sp-6); border-bottom: 1px solid var(--border);
   background: linear-gradient(var(--elev), var(--panel)); flex: 0 0 auto;
 }
-.tb-cell { display: flex; align-items: center; gap: var(--sp-3); min-width: 0; flex-wrap: wrap; }
+/* One logical cluster: two stacked rows of controls that travel together. The leading hairline
+   replaces the old `.tb-divide` grid item and bleeds into the bar's padding so it reads full-height. */
+.tb-group {
+  flex: 0 0 auto;
+  /* `1fr 1fr` against the stretched flex height, NOT `auto auto`: every cluster is stretched to the
+     tallest one on its bar row, so equal fractions give all clusters the SAME two row heights. With
+     `auto` each cluster would size its rows to its own contents and the bar's two lines of controls
+     would drift out of alignment with one another. */
+  display: grid; grid-template-rows: 1fr 1fr; grid-auto-flow: column;
+  align-items: center; column-gap: var(--tb-gap); row-gap: 2px;
+  border-inline-start: 1px solid var(--border); padding-inline-start: var(--tb-gap);
+  margin-block: calc(-1 * var(--tb-pad-y)); padding-block: var(--tb-pad-y);
+}
+/* No hairline at the left edge of the bar — nor at the start of a WRAPPED row, which CSS cannot
+   detect on its own; `.tb-row-start` is tagged from a ResizeObserver in dashboard.ts. */
+.toolbar > .tb-group:first-child,
+.toolbar > .tb-group.tb-row-start { border-inline-start-color: transparent; padding-inline-start: 0; }
+/* Cells never wrap internally any more — that was the ragged-wrap safety valve; the cluster wraps. */
+.tb-cell { display: flex; align-items: center; gap: var(--sp-3); flex-wrap: nowrap; white-space: nowrap; }
 /* Marker cluster packs 3 controls (checkbox · size · mode) in one cell — widen the internal gap so
    they read as clearly separated, matching the spacing between other toolbar clusters. */
 .tb-cell.marker-controls { gap: var(--sp-6); }
 /* Compact controls inside the toolbar so each of the two rows stays short (side panels unaffected). */
 .toolbar select,
 .toolbar input[type="text"],
-.toolbar input[type="number"] { padding: 1px var(--sp-2); font-size: var(--fs-1); }
+.toolbar input[type="number"] {
+  height: var(--ctl-h); padding: 0 var(--sp-2); font-size: var(--fs-1); line-height: 1;
+  box-sizing: border-box; vertical-align: middle;
+}
+.toolbar .tb-field.inline { align-items: center; line-height: 1; }
+.toolbar .tb-field.inline > span { line-height: 1; display: inline-flex; align-items: center; }
+.toolbar .tb-field input[type="checkbox"] { margin: 0; flex-shrink: 0; align-self: center; }
+/* vol / surf rows: fixed name column so the two layer selects share one vertical edge. */
+.toolbar .tb-layer-row {
+  display: inline-grid;
+  grid-template-columns: 14px var(--tb-layer-name-w) var(--tb-layer-select-w);
+  align-items: center;
+  column-gap: var(--sp-2);
+}
+.toolbar .tb-layer-row select { width: var(--tb-layer-select-w); min-width: 0; }
 .toolbar .primary,
 .toolbar .ghost,
 .toolbar .panel-btn { padding: 0 10px; }
@@ -44,11 +85,6 @@ body {
 .toolbar .slider-field { margin-bottom: 0; }
 .toolbar .slider-row input[type="range"] { height: 13px; }
 .toolbar .slider-num { padding: 0 3px; width: 44px; }
-/* Full-height hairline separating the toolbar into logical clusters (mirrors the info-panel seams).
-   Spans both grid rows so it reads as one vertical rule between column groups. */
-.tb-divide { grid-row: 1 / 3; align-self: stretch; width: 1px; background: var(--border); margin: -5px 0; }
-/* A toolbar cell that spans both rows (e.g. the montage layouts, centred right of vol/surf). */
-.tb-span { grid-row: 1 / 3; align-self: center; }
 .views { display: flex; }
 .view-btn { position: relative; background: var(--panel-2); border: 1px solid var(--border); color: var(--text); padding: var(--sp-1) 6px; border-radius: 0; margin-left: -1px; cursor: pointer; font-size: var(--fs-1); transition: border-color var(--dur) var(--ease), color var(--dur) var(--ease), background var(--dur) var(--ease); }
 .views .view-btn:first-child { border-radius: var(--r-sm) 0 0 var(--r-sm); margin-left: 0; }
@@ -60,7 +96,10 @@ body {
 .view-btn:disabled { opacity: 0.4; cursor: default; }
 select.narrow { width: 96px; }
 select:disabled { opacity: 0.45; cursor: default; }
-.brand { font-weight: 700; letter-spacing: -0.01em; display: flex; align-items: center; gap: var(--sp-3); }.badge { font-size: var(--fs-xs); padding: 1px var(--sp-2); border: 1px solid var(--border-2); border-radius: var(--r-pill); color: var(--muted); }
+.brand { font-weight: 700; letter-spacing: -0.01em; display: flex; align-items: center; gap: var(--sp-3); }
+/* Plain version line under the brand — no chip, so it shares the title’s left edge. */
+.toolbar .tb-version { font-size: var(--fs-xs); font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; line-height: 1.2; }
+.badge { font-size: var(--fs-xs); padding: 1px var(--sp-2); border: 1px solid var(--border-2); border-radius: var(--r-pill); color: var(--muted); }
 .tb-field { display: flex; align-items: center; gap: var(--sp-2); color: var(--muted); }
 .tb-field.inline > span { color: var(--muted); }
 .layer-selectors { display: flex; align-items: center; gap: var(--sp-5); }
@@ -76,8 +115,13 @@ select:disabled { opacity: 0.45; cursor: default; }
    as the text view buttons. Tune this one value if the icons feel large/small. */
 .layout-btn svg { display: block; width: auto; height: 15px; fill: currentColor; opacity: 0.55; }
 .layout-btn:hover:not(.active) svg, .layout-btn.active svg { opacity: 1; }
-/* Toolbar category tabs: a segmented bar; the active tab carries an amber underline. */
-.panels { display: flex; gap: var(--sp-1); flex-wrap: wrap; }
+/* Toolbar category tabs: a 2x2 block filling BOTH bar rows (this cluster's second row used to sit
+   empty while the four tabs fought for width in the first). The active tab carries an amber
+   underline. Buttons stretch to their column, so the block reads as one unit. */
+.tb-tabs {
+  grid-auto-flow: row; grid-template-columns: auto auto;
+  column-gap: var(--sp-1); row-gap: var(--sp-1); align-content: center;
+}
 .panel-btn { position: relative; display: inline-flex; align-items: center; justify-content: center; height: var(--ctl-h); line-height: 1; background: var(--panel-2); border: 1px solid var(--border); color: var(--text); padding: 0 11px; border-radius: var(--r-md); cursor: pointer; text-transform: uppercase; letter-spacing: .06em; font-size: 12px; font-weight: 600; transition: border-color var(--dur) var(--ease), color var(--dur) var(--ease), background var(--dur) var(--ease); }
 .panel-btn:hover:not(:disabled):not(.active) { border-color: var(--border-2); color: var(--accent-2); }
 .panel-btn.active { border-color: var(--accent); color: var(--accent-2); background: var(--accent-tint); }
@@ -87,6 +131,23 @@ select:disabled { opacity: 0.45; cursor: default; }
 }
 .panel-btn:disabled { opacity: 0.4; cursor: default; }
 .status { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+/* Compact tier. The bar's natural width is ~1450px while Electron opens at 1440 — and OS display
+   scaling / Ctrl+zoom shrink the CSS-px viewport further — so tighten before anything has to wrap.
+   Buys ~160px: tighter cluster gaps, a narrower mode select, and the two micro-labels clipped.
+   Below ~1290px whole clusters wrap to a third bar row; nothing is ever clipped or hidden. */
+@media (max-width: 1460px) {
+  .toolbar { --tb-gap: var(--sp-4); --tb-mode-w: 96px; }
+  .toolbar .tb-cell.marker-controls { gap: var(--sp-4); }
+  /* Micro-labels only, and CLIPPED rather than `display: none`: the text stays in the wrapping
+     <label>, so the slider's and select's accessible names are unchanged for screen readers. Both
+     fields also carry a `title` (set in dashboard.ts) for mouse users. */
+  .toolbar .marker-controls .slider-label,
+  .toolbar .marker-controls .select-field > span {
+    position: absolute; width: 1px; height: 1px; overflow: hidden;
+    clip-path: inset(50%); white-space: nowrap;
+  }
+}
 
 select, input[type="text"], input[type="password"], input[type="number"] {
   background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--r-md);
@@ -314,6 +375,9 @@ input.point-name { grid-area: name; width: 100%; min-width: 0; padding: 0 var(--
 .legend-actions { display: flex; align-items: center; gap: var(--sp-1); margin-bottom: var(--row-gap); flex-wrap: wrap; }
 .legend-count { margin-left: auto; font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
 .ghost.sm { padding: 3px 7px; font-size: var(--fs-sm); }
+/* A ghost button acting as a toggle (the colormap reverse switch) shows its on-state the way the
+   view/layout toggles do, so "pressed" is legible without a checkbox. */
+.ghost.active { border-color: var(--accent); color: var(--accent-2); background: var(--accent-tint); }
 .legend-search { width: 100%; margin-bottom: var(--row-gap); }
 .legend-scroll { position: relative; flex: 1 1 auto; overflow-y: auto; min-height: 0; }
 .legend-rows { position: absolute; top: 0; left: 0; right: 0; will-change: transform; }
@@ -334,16 +398,29 @@ input.point-name { grid-area: name; width: 100%; min-width: 0; padding: 0 var(--
   padding: 0 4px; border: 1px solid rgba(255,240,210,0.15); border-radius: var(--r-xs); line-height: 1.4;
 }
 
-/* Docked category picker: sits at the top of the side panel (no longer a floating overlay). */
-.side-picker { flex: 0 0 auto; }
+/* Docked category picker: sits at the top of the side panel (no longer a floating overlay).
+   Shrinkable + self-scrolling: it has no other way to give height back, and a picker taller than a
+   short column would otherwise spill and paint over the content slot and the colour dock below it. */
+.side-picker { flex: 0 1 auto; min-height: 0; overflow-y: auto; }
 .side-panel { width: 100%; padding: 2px 0 11px; margin-bottom: 9px; }
 .side-panel[hidden] { display: none; }
 /* Prominent bold panel title (function / atlas / morphology) — kept distinct from the muted
    small-caps sub-headers below; only its spacing is normalized to the shared scale. */
 .side-panel-head { font-weight: 700; margin-bottom: var(--sp-3); text-transform: uppercase; letter-spacing: .06em; }
+/* One label column so selects and slider tracks left-align; width = longest typical label, not excess padding. */
+.side-panel .field.inline.select-field,
+.side-panel .slider-field { gap: var(--sp-2); }
+.side-panel .select-field > span,
+.side-panel .slider-field > .slider-label {
+  flex: 0 0 4.00rem;
+  white-space: nowrap;
+}
 /* Content below the docked picker; exactly one slot is visible at a time (ROI legend / func / morph). */
 .side-content { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
-.side-slot { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+/* `overflow: hidden` is the safety net for the whole column: `.color-dock` is a LATER sibling, so
+   anything a squeezed slot lets escape paints on top of the COLOR DISPLAY block rather than being
+   clipped. A slot that runs out of room truncates; it never overlaps. */
+.side-slot { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
 .side-slot[hidden] { display: none; }
 .side-caption { font-size: var(--fs-1); padding: 2px 0; }
 .chip-row { display: flex; flex-wrap: wrap; gap: var(--sp-1); margin-bottom: var(--row-gap); }
@@ -533,7 +610,15 @@ input.point-name { grid-area: name; width: 100%; min-width: 0; padding: 0 var(--
 /* Local and Remote stack as full-width rows (one above the other). */
 .source-forms { display: flex; flex-direction: column; gap: var(--sp-5); }
 .source-form { border: 1px solid var(--border); border-radius: var(--r-md); padding: var(--sp-5); }
-.source-form h3 { margin: 0 0 var(--sp-3); font-size: var(--fs-1); text-transform: uppercase; color: var(--muted); }
+.source-form h3,
+.source-form .source-form-head { margin: 0 0 var(--sp-3); font-size: var(--fs-1); text-transform: uppercase; color: var(--muted); }
+/* Remote SSH/SFTP: same h3 as local; head toggles collapse (no separate button chrome). */
+.source-form.collapsible .source-form-head { cursor: pointer; transition: color var(--dur) var(--ease); }
+.source-form.collapsible .source-form-head:hover,
+.source-form.collapsible .source-form-head:focus-visible { color: var(--accent-2); }
+.source-form.collapsible .source-form-head:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-xs); }
+.source-form.collapsible.collapsed .source-form-head { margin-bottom: 0; }
+.source-form.collapsible.collapsed .source-form-body { display: none; }
 /* Remote connection: a "recent" recall row on top, a 2-column field grid, then Connect bottom-right. */
 .conn-recall { margin-bottom: var(--sp-4); }
 .conn-recall > .muted { flex: 0 0 auto; font-size: var(--fs-sm); }
@@ -607,9 +692,23 @@ input.point-name { grid-area: name; width: 100%; min-width: 0; padding: 0 var(--
   transition: border-color var(--dur) var(--ease);
 }
 .cmap-trigger:hover, .cmap-trigger.open { border-color: var(--accent); }
+/* Square on purpose: this is a sample of a CONTINUOUS ramp, and a diverging map is judged by its
+   extremes ("is it red-high or blue-high?"), so a corner radius eats the part carrying the meaning.
+   Categorical chips like .legend-swatch keep --r-xs -- they have no endpoints to lose. */
 .cmap-swatch {
-  flex: 0 0 auto; width: 34px; height: 14px; border-radius: var(--r-xs);
+  flex: 0 0 auto; width: 34px; height: 14px;
   border: 1px solid rgba(255,240,210,.15);
+  /* The gradient must be SIZED to the border box, not just painted over it. By default a background
+     is positioned against the padding box but clipped to the border box, so a 34px swatch sized a
+     32px gradient tile and then filled the leftover 1px strips by REPEATING it -- putting the map's
+     last colour down the left edge and its first colour down the right. On a diverging map that put
+     red hard against blue and read as part of the ramp.
+
+     This rule only holds while the JS assigns background-IMAGE. The `background` shorthand resets
+     background-origin to padding-box, and an inline style beats this rule, so a single
+     `el.style.background = ...` silently brings the defect back looking like a stale bundle.
+     See colormapPicker.paintTrigger and tests/inline-style_test.mjs. */
+  background-origin: border-box;
 }
 .cmap-label { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-1); }
 .cmap-caret { flex: 0 0 auto; color: var(--muted); font-size: 10px; }
@@ -674,11 +773,14 @@ input.slider-num { flex: 0 0 auto; width: var(--num-w); padding: 0 var(--sp-1); 
 .tb-cell .slider-field { margin-bottom: 0; gap: var(--sp-2); }
 .tb-cell .slider-row { width: 54px; flex: 0 0 auto; }
 .tb-cell .select-field { margin-bottom: 0; }
-.tb-cell .select-field select { flex: 0 0 auto; width: 118px; }
+.tb-cell .select-field select { flex: 0 0 auto; width: var(--tb-mode-w); }
 
 /* ---------- unified "Color display" section (docked at side-panel bottom) ---------- */
 /* Capped + internally scrollable so it never pushes the ROI legend off-screen or past the cell. */
-.color-dock { flex: 0 0 auto; min-height: 0; max-height: 62%; overflow-y: auto; }
+/* `flex: 0 1 auto`, not `0 0 auto`: with min-height 0 and its own scroller this block is built to
+   give height back, and while it refused to, every pixel of shortage landed on `.side-content` —
+   which is how the change tab's ROI fits table got crushed to zero rows. */
+.color-dock { flex: 0 1 auto; min-height: 0; max-height: 62%; overflow-y: auto; }
 .color-display { border-top: 1px solid var(--border); padding: var(--sp-3) 0 var(--sp-1); margin-top: var(--sp-3); }
 .color-display[hidden] { display: none; }
 .color-display-title { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: var(--sp-3); }
@@ -709,7 +811,9 @@ input.slider-num { flex: 0 0 auto; width: var(--num-w); padding: 0 var(--sp-1); 
 .colorbar[hidden] { display: none; }
 .colorbar-head { font-size: var(--fs-xs); letter-spacing: .06em; text-transform: uppercase; }
 .colorbar-track {
-  position: relative; height: 12px; border-radius: var(--r-xs); overflow: hidden;
+  /* Square, like .cmap-swatch: the colorbar is the other continuous-ramp readout, and its endpoint
+     colours are exactly what the reader matches against the scale's min/max. */
+  position: relative; height: 12px; overflow: hidden;
   border: 1px solid var(--border-2);
 }
 .colorbar-gradient { position: absolute; inset: 0; }
@@ -755,10 +859,48 @@ input.slider-num { flex: 0 0 auto; width: var(--num-w); padding: 0 var(--sp-1); 
 .report-folder { color: var(--muted); font-family: var(--mono); font-size: var(--fs-1);
   overflow-wrap: anywhere; }
 
+/* Change tab: ROI table slot below the map pickers (border matches .color-display). */
+.change-slot {
+  border-top: 1px solid var(--border);
+  padding-top: var(--sp-3);
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.change-slot > .legend-title {
+  flex: 0 0 auto;
+  margin-bottom: var(--row-gap);
+}
+.change-slot > .roi-rate-table {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 /* --- longitudinal change panel --------------------------------------------------------------
-   The time-source note is pinned above the pickers and cannot be dismissed: when brainana had no
-   real time column the values are a change per scan, and nothing about the rendered map says so. */
+   The time-source note sits BELOW the pickers and cannot be dismissed: when brainana had no real
+   time column the values are a change per scan, and nothing about the rendered map says so. It is
+   context rather than a control, so the controls take the top of the panel and the note follows. */
 .panel-note { font-size: var(--fs-sm); line-height: 1.45; margin: 0 0 var(--sp-3); }
+/* Collapsed to its headline by default. A scroll box was the wrong answer here — it put a scrollbar
+   inside the side picker's own scrollbar and the text still claimed the height, which `.side-picker`
+   (flex: 0 1 auto) then took out of the ROI fits table below. The caret matches `.group-head` /
+   `.color-display-head`: a 9px ▾ that rotates shut, so the three collapsibles in this column read as
+   one control. `details` handles the state, so no JS and no `.collapsed` class to keep in sync. */
+details.panel-note > summary {
+  display: flex; align-items: baseline; gap: var(--sp-2);
+  cursor: pointer; list-style: none;
+  transition: color var(--dur) var(--ease);
+}
+details.panel-note > summary::-webkit-details-marker { display: none; }
+details.panel-note > summary::before {
+  content: '▾'; flex: 0 0 auto; font-size: 9px;
+  transform: rotate(-90deg); transition: transform var(--dur) var(--ease);
+}
+details.panel-note[open] > summary::before { transform: none; }
+details.panel-note > summary:hover { color: var(--accent-2); }
+details.panel-note > summary + p { margin-top: var(--sp-2); }
+.side-picker .panel-note:last-child { margin-bottom: 0; }
 .panel-note p { margin: 0 0 var(--sp-2); }
 .panel-note p:last-child { margin-bottom: 0; }
 .panel-note.muted { color: var(--muted); }
@@ -769,23 +911,40 @@ input.slider-num { flex: 0 0 auto; width: var(--num-w); padding: 0 var(--sp-1); 
   padding: var(--sp-2) var(--sp-3);
   border-radius: var(--r-xs);
 }
-.panel-group.agreement { margin-top: var(--sp-3); font-size: var(--fs-sm); }
-.panel-group.agreement > summary { cursor: pointer; color: var(--muted); }
-.agreement-value { color: var(--text); }
-.agreement-value.warn { color: var(--warn); }
-.agreement-note { color: var(--warn); margin: var(--sp-2) 0; }
-.agreement-rows { margin-top: var(--sp-2); }
-.agreement-row { display: flex; justify-content: space-between; gap: var(--sp-3); padding: 1px 0; color: var(--muted); }
-.agreement-row .num { font-family: var(--mono); color: var(--text); }
-
 /* ROI rate table (change tab content slot). Plain rows, right-aligned numerics. */
 .roi-rate-table { display: flex; flex-direction: column; gap: var(--sp-2); min-height: 0; }
-.roi-rate-controls { display: flex; gap: var(--sp-3); flex-wrap: wrap; }
+/* One field per row on a shared label track, NOT a wrapping flex row. Three fixed-width 96px
+   `select.narrow` fields wrapped unpredictably at the panel's 220-280px (`--legend-width`), landing
+   the selects at three different left edges. The 4rem track is the same one the change pickers use
+   (`.side-panel .select-field > span`), so stat/sort/hemi line up with measure/statistic/opacity
+   above them and every control in the column shares one vertical edge. */
+.roi-rate-controls { display: grid; gap: var(--sp-2); }
+.roi-rate-controls .field { margin-bottom: 0; min-width: 0; }
+.roi-rate-controls .field.inline {
+  display: grid; grid-template-columns: 4.00rem minmax(0, 1fr);
+  gap: var(--sp-2); align-items: center;
+}
+.roi-rate-controls select.narrow { width: auto; min-width: 0; }
+/* `.field`'s `display: flex` out-ranks the UA [hidden] rule, so the stat picker stayed visible for
+   single-statistic measures — same trap as .vol-rail[hidden] / .color-display-body .field[hidden]. */
+.roi-rate-controls .field[hidden] { display: none; }
 .roi-rate-caption { font-size: var(--fs-sm); margin: 0; }
 .roi-rate-body { overflow: auto; min-height: 0; font-size: var(--fs-sm); }
-.roi-rate-row { display: grid; grid-template-columns: minmax(0, 1fr) 2.6em repeat(4, 4.2em); gap: var(--sp-2); padding: 1px 0; align-items: baseline; }
+/* Every row (the sticky header included) carries the SAME min-width, so the grid overflows a narrow
+   panel and .roi-rate-body scrolls sideways instead of crushing the ROI name to one character. It has
+   to be a shared min-width rather than a bigger minmax() floor or width:max-content: a floor alone
+   leaves each row BOX at container width, so the zebra stripes and the header's background would be
+   cut off the moment you scroll right, and max-content would size every row's 1fr track to its own
+   longest name, so the columns would stop lining up with each other. The fixed columns plus gaps cost
+   ~22em, which leaves the ROI column ~8em before it starts growing with the panel. */
+.roi-rate-row { display: grid; grid-template-columns: minmax(0, 1fr) 2.6em repeat(4, 4.2em); gap: var(--sp-2); padding: 1px 0; align-items: baseline; min-width: 30em; }
 .roi-rate-row:nth-child(even of :not(.head)) { background: color-mix(in srgb, var(--text) 4%, transparent); }
 .roi-rate-row.head { color: var(--muted); text-transform: uppercase; letter-spacing: .05em; position: sticky; top: 0; background: var(--panel); }
 .roi-rate-row .roi { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .roi-rate-row .num { text-align: right; font-family: var(--mono); }
+/* The column the surface is currently painting. Tying the table's three numeric columns back to the
+   statistic picker is what stops "rate" / "mean" / "% change" reading as three unrelated numbers. */
+.roi-rate-row .num.active { color: var(--accent-2); }
+.roi-rate-row.head .num.active { color: var(--accent-2); }
+.roi-rate-legend { font-size: var(--fs-xs); margin: 0; }
 .roi-rate-row .hemi { color: var(--muted); }

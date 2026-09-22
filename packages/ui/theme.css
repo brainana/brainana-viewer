@@ -76,7 +76,9 @@
   --num-w: 56px;              /* width of the small numeric boxes beside sliders/ranges */
 
   /* ---- radius scale ---- */
-  --r-xs: 3px;                /* micro radius: swatches, colorbar track, zebra rows */
+  --r-xs: 3px;                /* micro radius: categorical chips, tags, zebra rows. NOT the
+                                 continuous-ramp readouts (.cmap-swatch, .colorbar-track) -- those
+                                 are square so their endpoint colours survive to the edge. */
   --r-sm: 6px;
   --r-md: 9px;
   --r-lg: 14px;

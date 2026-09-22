@@ -143,10 +143,16 @@ dl.mini dd { margin: 0; font-family: var(--mono); font-variant-numeric: tabular-
 .viewer-frame { height: min(80vh, 800px); min-height: 640px; border: 1px solid var(--border-2); border-radius: 16px; overflow: hidden; box-shadow: 0 34px 90px -34px rgba(0,0,0,.72); background: var(--bg); }
 .app { height: 100%; display: flex; flex-direction: column; font-size: 13px; }
 
-.toolbar { display: grid; grid-template-rows: auto auto; grid-auto-flow: column; justify-content: start; align-items: center; column-gap: 20px; row-gap: 6px; padding: 9px 16px; border-bottom: 1px solid var(--border); background: linear-gradient(var(--elev), var(--panel)); flex: 0 0 auto; }
-.tb-cell { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* A wrapping row of atomic clusters — see docs/design_guideline/layout-density.md
+   ("Toolbar wrapping contract"). Each .tb-group is its own two-row grid and drops to the next bar
+   row as a UNIT; cells never wrap internally, so a button group is never split in half. */
+.toolbar { --tb-gap: 20px; --tb-pad-y: 9px; display: flex; flex-wrap: wrap; align-items: stretch; column-gap: var(--tb-gap); row-gap: 4px; padding: var(--tb-pad-y) 16px; border-bottom: 1px solid var(--border); background: linear-gradient(var(--elev), var(--panel)); flex: 0 0 auto; }
+.tb-group { flex: 0 0 auto; display: grid; grid-template-rows: 1fr 1fr; grid-auto-flow: column; align-items: center; column-gap: var(--tb-gap); row-gap: 6px; border-inline-start: 1px solid var(--border); padding-inline-start: var(--tb-gap); margin-block: calc(-1 * var(--tb-pad-y)); padding-block: var(--tb-pad-y); }
+.toolbar > .tb-group:first-child { border-inline-start-color: transparent; padding-inline-start: 0; }
+.tb-cell { display: flex; align-items: center; gap: 8px; flex-wrap: nowrap; white-space: nowrap; }
 .brand { font-weight: 700; letter-spacing: -0.01em; font-size: 14.5px; display: flex; align-items: center; gap: 8px; }
 .brand .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 10px var(--accent); }
+.tb-version { font-size: 10px; font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; line-height: 1.2; }
 .tb-badge { font-family: var(--mono); font-size: 10px; padding: 1px 7px; border: 1px solid var(--border-2); border-radius: var(--r-pill); color: var(--muted); }
 .tb-field { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
 .tb-field select { padding: 4px 7px; font-size: 12px; }
@@ -158,7 +164,8 @@ select.narrow { width: 104px; }
 .checkbox:checked { background: var(--accent); border-color: var(--accent); }
 .checkbox:checked::after { content: "✓"; position: absolute; inset: 0; display: grid; place-items: center; font-size: 10px; color: var(--accent-ink); }
 .views { display: flex; gap: 4px; }
-.panels { display: flex; gap: 5px; }
+/* Category tabs: a 2x2 block filling both bar rows (four on one line is the widest thing in the bar). */
+.tb-tabs { grid-auto-flow: row; grid-template-columns: auto auto; column-gap: 5px; row-gap: 5px; align-content: center; }
 
 .dashboard { flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) var(--legend-width); grid-template-rows: minmax(0, 1fr) var(--info-height); gap: 1px; background: var(--border); }
 .viewer-area { grid-column: 1; grid-row: 1; display: grid; grid-template-columns: minmax(240px, 36%) minmax(0, 64%); gap: 1px; background: var(--border); min-height: 0; }
@@ -310,22 +317,30 @@ select.narrow { width: 104px; }
   <div class="viewer-frame">
     <div class="app">
       <header class="toolbar">
-        <div class="tb-cell brand"><span class="dot"></span>Brainana&nbsp;Viewer</div>
-        <div class="tb-cell"><span class="tb-badge">v0.1.0</span></div>
-        <div class="tb-cell"><button class="btn-primary" style="padding:5px 12px">Dataset</button></div>
-        <div class="tb-cell"><label class="tb-field">Monkey <select><option>sub-032309m</option></select></label></div>
-        <div class="tb-cell">
-          <label class="tb-field"><input class="checkbox" type="checkbox" checked /> vol <select class="narrow"><option>norm.mgz</option></select></label>
-          <div class="montage"><button class="layout-btn">#</button><button class="layout-btn">▬</button><button class="layout-btn active">▮</button></div>
+        <div class="tb-group">
+          <div class="tb-cell brand"><span class="dot"></span>Brainana&nbsp;Viewer</div>
+          <div class="tb-cell"><span class="tb-version">v0.1.0</span><button class="btn-primary" style="padding:5px 12px">dataset</button></div>
         </div>
-        <div class="tb-cell">
-          <label class="tb-field"><input class="checkbox" type="checkbox" checked /> surf <select><option>Inflated</option></select></label>
-          <label class="tb-field"><input class="checkbox" type="checkbox" checked /> LH</label>
-          <label class="tb-field"><input class="checkbox" type="checkbox" checked /> RH</label>
-          <div class="views"><button class="view-btn">Lat</button><button class="view-btn">Med</button><button class="view-btn">Vent</button><button class="view-btn">Dor</button><button class="view-btn">Ant</button><button class="view-btn">Pos</button></div>
+        <div class="tb-group">
+          <div class="tb-cell"><label class="tb-field">sub <select><option>032309</option></select></label></div>
+          <div class="tb-cell"><label class="tb-field">ses <select><option>ses-001</option></select></label></div>
         </div>
-        <div class="tb-cell panels"><button class="panel-btn active">Atlases</button><button class="panel-btn">Morphology</button><button class="panel-btn active">Func Map</button></div>
-        <div class="tb-cell panels"><button class="panel-btn" disabled>Imported</button><button class="panel-btn" disabled>Import</button><button class="panel-btn" disabled>Export</button></div>
+        <div class="tb-group">
+          <div class="tb-cell">
+            <label class="tb-field"><input class="checkbox" type="checkbox" checked /> vol <select class="narrow"><option>norm.mgz</option></select></label>
+            <div class="montage"><button class="layout-btn">#</button><button class="layout-btn">▬</button><button class="layout-btn active">▮</button></div>
+          </div>
+          <div class="tb-cell">
+            <label class="tb-field"><input class="checkbox" type="checkbox" checked /> surf <select><option>Inflated</option></select></label>
+            <label class="tb-field"><input class="checkbox" type="checkbox" checked /> LH</label>
+            <label class="tb-field"><input class="checkbox" type="checkbox" checked /> RH</label>
+            <div class="views"><button class="view-btn">Lat</button><button class="view-btn">Med</button><button class="view-btn">Vent</button><button class="view-btn">Dor</button><button class="view-btn">Ant</button><button class="view-btn">Pos</button></div>
+          </div>
+        </div>
+        <div class="tb-group tb-tabs">
+          <button class="panel-btn active">Atlas</button><button class="panel-btn">Morphology</button>
+          <button class="panel-btn active">Func Map</button><button class="panel-btn">Change</button>
+        </div>
       </header>
 
       <div class="dash-wrap" style="flex:1 1 auto; min-height:0; display:flex">

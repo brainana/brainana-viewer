@@ -25,6 +25,9 @@ export interface Slider {
   setValue: (v: number) => void
   setBounds: (min: number, max: number, step?: number) => void
   setDisabled: (disabled: boolean) => void
+  /** Relabel in place — for a slider whose meaning follows another control (see the change panel's
+   *  magnitude threshold, which names the statistic it is thresholding). */
+  setLabel: (label: string) => void
 }
 
 const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v))
@@ -36,7 +39,8 @@ export function createSlider(opts: SliderOptions): Slider {
   const range = h('input', { type: 'range', min: String(min), max: String(max), step: String(step), value: String(opts.value) }) as HTMLInputElement
   const box = h('input', { type: 'number', class: 'slider-num', min: String(min), max: String(max), step: String(step), value: String(opts.value) }) as HTMLInputElement
   const suffixEl = opts.suffix ? h('span', { class: 'muted slider-suffix' }, [opts.suffix(opts.value)]) : null
-  const labelEl = h('span', { class: 'slider-label' }, suffixEl ? [`${opts.label} `, suffixEl] : [opts.label])
+  let labelText = opts.label
+  const labelEl = h('span', { class: 'slider-label' }, suffixEl ? [`${labelText} `, suffixEl] : [labelText])
   const fmtBox = opts.format ?? String // number-box read-out formatter; range input stays raw-numeric
 
   const sync = (v: number, source: 'range' | 'box' | 'both'): void => {
@@ -92,6 +96,14 @@ export function createSlider(opts: SliderOptions): Slider {
       range.disabled = disabled
       box.disabled = disabled
       element.classList.toggle('is-disabled', disabled)
+    },
+    setLabel: (label) => {
+      labelText = label
+      // Rebuild rather than set textContent: the suffix span is a child of the label and would be
+      // wiped by a plain assignment.
+      labelEl.textContent = ''
+      if (suffixEl) labelEl.append(`${labelText} `, suffixEl)
+      else labelEl.append(labelText)
     },
   }
 }
