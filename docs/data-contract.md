@@ -65,8 +65,15 @@ string, because it is absent from remote mirrors and partially-copied trees.
 | `long` | `sub-X_ses-Y_long` | `sub-X/anat/` | `fastsurfer/sub-X_ses-Y_long/` | base |
 
 Requested with `GET /api/sources/:id/manifest/<subjectId>?scan=<id>`; omitted means the subject's
-default, which is always a cross-sectional scan (a base template is an average, not a scan of the
-animal). An id naming no reconstruction of that subject is a **404**, never a silent fallback to a
+default, which is the **base template** where the subject has one and the first cross-sectional
+scan otherwise. The base carries the change maps, and the change tab is hidden on a scan without
+them, so defaulting to a cross-sectional session left the whole longitudinal feature invisible
+until someone thought to change `ses`. The cost is real and accepted: a base is an unbiased average
+rather than a scan of the animal, and the functional stream and the per-session surface atlases are
+registered to the cross-sectional scans, so reaching those takes a `ses` switch. A subject with no
+base template is unaffected, and so is every pre-v3 tree.
+
+An id naming no reconstruction of that subject is a **404**, never a silent fallback to a
 different scan. Ids are matched against the enumerated set and never parsed into a path.
 
 Two shapes that look like edge cases and are not:

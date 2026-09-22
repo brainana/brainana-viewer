@@ -186,10 +186,9 @@ export function summarizeTarget(target) {
 // Enumerate every reconstruction of one subject. Order: cross-sectional (natural session order),
 // then the base template, then the base-seeded timepoints.
 //
-// The DEFAULT is the first cross-sectional target, never the base: a base template is an unbiased
-// average of the subject's sessions, not a scan of the animal, so landing there by default would
-// make the viewer's opening view a synthetic image. It also keeps every pre-v3 tree resolving
-// exactly as it did before.
+// The DEFAULT is the base template where the subject has one, else the first cross-sectional
+// target -- see the reasoning beside `defaultTarget` at the foot of this function. A pre-v3 tree
+// has no base, so it resolves exactly as it always did.
 export function listViewTargets({ outputRoot, subjectDir }) {
   const subjectId = path.basename(subjectDir)
   const flatAnat = path.join(subjectDir, 'anat')
@@ -272,7 +271,13 @@ export function listViewTargets({ outputRoot, subjectDir }) {
     }
   }
 
-  const defaultTarget = targets.find((t) => t.stream === 'cross') ?? targets[0]
+  // The base template wins where a subject has one. It is the only target carrying the change maps
+  // (see manifest.mjs `offerMaps`), and the change tab is hidden without them -- so defaulting to a
+  // cross-sectional session left the whole longitudinal feature invisible until someone thought to
+  // change `ses`. The trade-off is deliberate: a base is an average rather than a scan of the
+  // animal, and the functional stream and per-session surface atlases live on the cross-sectional
+  // targets, so those need a `ses` switch now.
+  const defaultTarget = targets.find((t) => t.stream === 'base') ?? targets.find((t) => t.stream === 'cross') ?? targets[0]
   for (const t of targets) t.isDefault = t === defaultTarget
   return targets
 }

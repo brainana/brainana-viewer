@@ -24,7 +24,12 @@ Built on [NiiVue](https://github.com/niivue/niivue) + WebGL2, it runs on **macOS
 - **Atlases & regions** — automatically overlay brain parcellations and read the region under your cursor.
 - **Functional maps** — retinotopy and somatotopy on both volume and surface.
 - **Local or remote data** — dataset on your computer or a lab workstation.
-- **Compare monkeys** — easily switch subjects to compare across monkeys.
+- **Compare subjects** — easily switch subjects to compare across animals.
+- **Every reconstruction** — a subject processed at brainana's `session` or `session_longitudinal`
+  level has several reconstructions; the **scan** picker reaches each one, grouped cross-sectional
+  and longitudinal.
+- **Longitudinal change maps** — the per-vertex rate, temporal mean and percent change brainana fits
+  across a subject's timepoints, with a magnitude threshold and a table of per-ROI fits.
 - **HTML reports** — bookmark locations and export a self-contained report with file provenance,
   region and measurement readouts, and screenshots.
 
@@ -69,11 +74,14 @@ When you open the app it starts on a welcome screen — no data is loaded yet. A
    > connect to a server whose host key it cannot verify, so a machine-in-the-middle cannot
    > collect your password. If you get *"Unrecognised SSH host key"*, `ssh` to that host once
    > from a terminal (or run `ssh-keyscan`) to record its key, then retry.
-2. **Choose a monkey.** Pick a subject from the **monkey** dropdown; the default anatomy + surface view loads.
+2. **Choose a subject.** Pick one from the **sub** dropdown; the default anatomy + surface view
+   loads. If that subject has more than one reconstruction, the **scan** dropdown beside it lists
+   them — a longitudinal subject opens on its base template, where the change maps live.
 3. **Explore.** Use the toolbar and side panel to switch the base volume and surface, add an
    **atlas**, apply **morphology** shading or a **func map**, and tune colormaps. Click anywhere
    to move the crosshair and read out values.
-4. **Compare.** Reopen the **monkey** dropdown to switch subjects — your view settings carry over.
+4. **Compare.** Reopen the **sub** dropdown to switch subjects, or **scan** to switch
+   reconstructions — your view settings carry over.
 
 ### Try the demo dataset
 
@@ -127,7 +135,8 @@ scripts. See an [example report](docs/_static/brainana-viewer_report_example.htm
 - **Selections:** crosshair and bookmarked points;
 - **Screenshots:** slice montage, 3D surface, and images per point.
 
-Bookmarked points are in subject space; switching monkeys clears them.
+Bookmarked points are in the space of the reconstruction they were taken in; switching subject or
+scan clears them.
 
 ---
 
