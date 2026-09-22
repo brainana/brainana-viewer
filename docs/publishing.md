@@ -19,9 +19,9 @@ You never hand users the source code or ask them to run `npm`. Instead:
               │  you Publish a Release in the GitHub UI (it creates the v0.1.0 tag)
               ▼
    GitHub Actions builds the installers
-   ├─ macOS runner  → Brainana Viewer .dmg / .zip  (Apple Silicon AND Intel)
-   ├─ Windows runner → Brainana Viewer .exe
-   └─ Linux runner   → Brainana Viewer .AppImage / .deb
+   ├─ macOS runner  → brainana-viewer .dmg  (Apple Silicon AND Intel)
+   ├─ Windows runner → brainana-viewer .exe
+   └─ Linux runner   → brainana-viewer .AppImage / .deb
               │
               ▼
    a GitHub *Release* (a download page attached to the tag)
@@ -148,10 +148,16 @@ Open the `v1.0.0` Release on the **Releases** page and confirm these assets are 
 
 | OS | Files a user downloads |
 |---|---|
-| macOS, Apple Silicon (M1/M2/M3…) | `Brainana Viewer-1.0.0-arm64.dmg` |
-| macOS, Intel | `Brainana Viewer-1.0.0.dmg` (x64) |
-| Windows | `Brainana Viewer Setup 1.0.0.exe` |
-| Linux | `Brainana Viewer-1.0.0.AppImage`, `brainana-viewer_1.0.0_amd64.deb` |
+| macOS, Apple Silicon (M1/M2/M3…) | `brainana-viewer-1.1.0-arm64.dmg` |
+| macOS, Intel | `brainana-viewer-1.1.0-x64.dmg` |
+| Windows | `brainana-viewer-setup-1.1.0-x64.exe` |
+| Linux | `brainana-viewer-1.1.0-x86_64.AppImage`, `brainana-viewer_1.1.0_amd64.deb` |
+
+The installers are named from the package name, not from `productName` — a release asset gets
+curl'd and chmod'd, where the space in "Brainana Viewer" means percent-encoding in the URL and
+quoting in every shell command. The app itself is still called Brainana Viewer everywhere a user
+sees it. Set per target in `apps/viewer/electron-builder.yml`; the `.deb` keeps the Debian
+convention instead.
 
 (`.zip` copies of the Mac apps and `.yml`/`.blockmap` metadata files also appear — those are for
 future auto-update; leave them attached.) You can **Edit** the notes any time — the Release is
@@ -177,12 +183,12 @@ prompt because we haven't paid for a signing certificate. Tell your users:
   xattr -dr com.apple.quarantine "/Applications/Brainana Viewer.app"   # clear the download quarantine flag
   ```
 
-  Users must pick the download matching their chip: **Apple Silicon → the `-arm64.dmg`**,
-  **Intel → the plain `.dmg`**. (About This Mac shows which chip they have.)
+  Users must pick the download matching their chip: **Apple Silicon → `-arm64.dmg`**,
+  **Intel → `-x64.dmg`**. (About This Mac shows which chip they have.)
 - **Windows** — SmartScreen may show a blue "Windows protected your PC" box. Fix: **More info →
   Run anyway** (first time only).
-- **Linux** — no warning. For the AppImage: `chmod +x 'Brainana Viewer-0.1.0.AppImage'` then run
-  it. For the `.deb`: `sudo apt install ./brainana-viewer_0.1.0_amd64.deb`.
+- **Linux** — no warning. For the AppImage: `chmod +x brainana-viewer-1.1.0-x86_64.AppImage` then run
+  it. For the `.deb`: `sudo apt install ./brainana-viewer_1.1.0_amd64.deb`.
 
 Removing these prompts requires paid signing — see **Later: signed & notarized** below.
 
@@ -231,9 +237,9 @@ anything (no tag, no upload). Use it for local testing; use the tag + workflow f
   Delete the Release on github.com, fix things, and tag again.
 - **`.deb` fails to build on the Linux runner.** Rare; usually a missing `fakeroot`/`dpkg`. Add a
   step before packaging on the ubuntu job: `sudo apt-get update && sudo apt-get install -y fakeroot`.
-- **Two Mac assets have the same name.** The Intel build is the plain `.dmg`; Apple Silicon is
-  `-arm64.dmg`. If they collide, confirm the mac job passed `--arm64 --x64` (it's set in
-  `release.yml`).
+- **A Mac asset is missing.** Each chip carries its arch in the name (`-arm64.dmg` / `-x64.dmg`),
+  so they cannot collide. If only one is attached, confirm the mac job passed `--arm64 --x64`
+  (it's set in `release.yml`).
 
 ---
 

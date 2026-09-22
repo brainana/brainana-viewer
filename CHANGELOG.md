@@ -53,6 +53,12 @@ reconstruction. Output from 1.x and 2.x is read exactly as before.
   diverging map is read by its extremes. Categorical ROI chips keep their rounded corners.
 - The change tab separates its ROI fits table from the map controls with a border and a **ROI fits**
   title, matching the atlas legend.
+- **Installer filenames are hyphenated and carry their architecture** — `brainana-viewer-1.1.0-arm64.dmg`,
+  `brainana-viewer-setup-1.1.0-x64.exe`, `brainana-viewer-1.1.0-x86_64.AppImage`. They were named
+  from `productName`, so the space meant percent-encoded download URLs and shell quoting in every
+  install command. The app is still called Brainana Viewer everywhere a user sees it, and the
+  `.deb` keeps its Debian-convention name. The Intel `.dmg` is no longer the "plain" one: both Mac
+  builds now say which chip they are for.
 
 #### Manifest API
 

@@ -39,10 +39,10 @@ Grab the app for your operating system from the **[Releases page](../../releases
 
 | Your system | Download |
 | ----------- | -------- |
-| **macOS — Apple Silicon** (M1/M2/M3…) | `Brainana Viewer-*-arm64.dmg` |
-| **macOS — Intel** | `Brainana Viewer-*.dmg` |
-| **Windows** | `Brainana Viewer Setup *.exe` |
-| **Linux** | `Brainana Viewer-*.AppImage` or `brainana-viewer_*_amd64.deb` |
+| **macOS — Apple Silicon** (M1/M2/M3…) | `brainana-viewer-*-arm64.dmg` |
+| **macOS — Intel** | `brainana-viewer-*-x64.dmg` |
+| **Windows** | `brainana-viewer-setup-*-x64.exe` |
+| **Linux** | `brainana-viewer-*-x86_64.AppImage` or `brainana-viewer_*_amd64.deb` |
 
 > **First launch:** the app is currently **unsigned**, so the first time you open it macOS and
 > Windows warn that it's from an unidentified developer. You only need to clear this once per app.
@@ -54,7 +54,7 @@ Grab the app for your operating system from the **[Releases page](../../releases
 > - **Windows:** on the SmartScreen prompt choose **More info → Run anyway**.
 > - **Linux (AppImage):** if double-clicking shows *"no application installed for AppImage… files"*,
 >   the file just needs the executable bit — right-click → **Properties → Permissions → Allow
->   executing file as program**, or run `chmod +x Brainana-Viewer-*.AppImage && ./Brainana-Viewer-*.AppImage`.
+>   executing file as program**, or run `chmod +x brainana-viewer-*.AppImage && ./brainana-viewer-*.AppImage`.
 >   *(The `.deb` needs none of this.)*
 
 Not sure which Mac chip you have? Check **Apple menu → About This Mac.**
