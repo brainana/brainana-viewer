@@ -63,7 +63,7 @@ export function mountSourcesDialog(deps: Deps, onChanged: () => void, onDone?: (
   closeBtn.addEventListener('click', close)
 
   let hasSources = false
-  const continueBtn = h('button', { type: 'button', class: 'primary' }, ['continue, choose a monkey'])
+  const continueBtn = h('button', { type: 'button', class: 'primary' }, ['continue, choose a sub'])
   continueBtn.disabled = true
   continueBtn.addEventListener('click', () => {
     close()
@@ -158,7 +158,10 @@ export function mountSourcesDialog(deps: Deps, onChanged: () => void, onDone?: (
     hasSources = items.length > 0
     continueBtn.disabled = !hasSources
   }
-  unsub = sources.subscribe(renderList)
+  let onRegistryChange = (items: SourceSummary[]): void => {
+    renderList(items)
+  }
+  unsub = sources.subscribe((items) => onRegistryChange(items))
 
   // local form
   const localPath = h('input', { type: 'text', placeholder: '/path/to/brainana/output', class: 'grow' }) as HTMLInputElement
@@ -473,6 +476,51 @@ export function mountSourcesDialog(deps: Deps, onChanged: () => void, onDone?: (
     }),
   )
 
+  // Remote add is uncommon — collapse by default; stay open if a remote source is already registered.
+  const remoteFormHead = h('h3', { class: 'source-form-head' }, ['remote dataset (SSH/SFTP)']) as HTMLHeadingElement
+  remoteFormHead.tabIndex = 0
+  remoteFormHead.setAttribute('role', 'button')
+  const remoteFormBody = h('div', { class: 'source-form-body' }, [
+    // Top recall: reload a saved connection or a ~/.ssh/config host into the fields below.
+    h('div', { class: 'row conn-recall' }, [h('span', { class: 'muted' }, ['recent']), profileSelect, loadBtn, removeProfileBtn]),
+    // Fields in a 2-column grid: host (wide) + port (narrow); then user + password (equal).
+    h('div', { class: 'row' }, [field('host', rHost), portField]),
+    h('div', { class: 'row' }, [field('user', rUser), field('password', rPass)]),
+    // Connect/disconnect action, status message to its left.
+    h('div', { class: 'row' }, [remoteMsg, h('span', { class: 'spacer' }), connectBtn, disconnectBtn]),
+    connBanner,
+    remoteAddRow,
+    remoteAddMsg,
+  ])
+  const remoteFormCollapsed = !sources.list().some((s) => s.type === 'remote')
+  const remoteForm = h('div', {
+    class: `source-form collapsible${remoteFormCollapsed ? ' collapsed' : ''}`,
+  }, [remoteFormHead, remoteFormBody])
+  const syncRemoteFormExpanded = (): void => {
+    const open = !remoteForm.classList.contains('collapsed')
+    remoteFormHead.setAttribute('aria-expanded', String(open))
+    remoteFormHead.title = open ? '' : 'Show SSH/SFTP connection fields'
+  }
+  const toggleRemoteForm = (): void => {
+    remoteForm.classList.toggle('collapsed')
+    syncRemoteFormExpanded()
+  }
+  remoteFormHead.addEventListener('click', toggleRemoteForm)
+  remoteFormHead.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      toggleRemoteForm()
+    }
+  })
+  syncRemoteFormExpanded()
+  onRegistryChange = (items) => {
+    renderList(items)
+    if (items.some((s) => s.type === 'remote')) {
+      remoteForm.classList.remove('collapsed')
+      syncRemoteFormExpanded()
+    }
+  }
+
   const dialog = h('div', { class: 'dialog' }, [
     h('div', { class: 'dialog-head' }, [h('h2', {}, ['datasets']), h('span', { class: 'spacer' }), closeBtn]),
     list,
@@ -482,19 +530,7 @@ export function mountSourcesDialog(deps: Deps, onChanged: () => void, onDone?: (
         h('div', { class: 'row' }, [localPath, browseBtn, localBtn]),
         localMsg,
       ]),
-      h('div', { class: 'source-form' }, [
-        h('h3', {}, ['remote dataset (SSH/SFTP)']),
-        // Top recall: reload a saved connection or a ~/.ssh/config host into the fields below.
-        h('div', { class: 'row conn-recall' }, [h('span', { class: 'muted' }, ['recent']), profileSelect, loadBtn, removeProfileBtn]),
-        // Fields in a 2-column grid: host (wide) + port (narrow); then user + password (equal).
-        h('div', { class: 'row' }, [field('host', rHost), portField]),
-        h('div', { class: 'row' }, [field('user', rUser), field('password', rPass)]),
-        // Connect/disconnect action, status message to its left.
-        h('div', { class: 'row' }, [remoteMsg, h('span', { class: 'spacer' }), connectBtn, disconnectBtn]),
-        connBanner,
-        remoteAddRow,
-        remoteAddMsg,
-      ]),
+      remoteForm,
     ]),
       h('div', { class: 'dialog-foot' }, [cacheStatus, clearCacheBtn, h('span', { class: 'spacer' }), continueBtn]),
   ])

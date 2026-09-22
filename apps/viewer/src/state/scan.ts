@@ -18,16 +18,23 @@ export function groupScans(scans: ScanSummary[]): { cross: ScanSummary[]; longit
 /**
  * The scan to land on when nothing else is asked for.
  *
- * Always a cross-sectional one where there is any, never the base template: a base is an unbiased
- * average of the subject's sessions, not a scan of the animal, so opening on it would make the
- * viewer's default view a synthetic image. It is also what the functional stream and the
- * per-session surface atlases are registered to, so it is the scan where most features work.
+ * The base template where a subject has one, else a cross-sectional scan. The base is the only
+ * reconstruction carrying the longitudinal change maps, and the change tab is hidden on a scan
+ * without them — so landing anywhere else hid the feature behind a `ses` switch nobody knew to make.
+ *
+ * The cost is real and accepted: a base is an unbiased average of the subject's sessions rather than
+ * a scan of the animal, and the functional stream and the per-session surface atlases are registered
+ * to the cross-sectional scans, so reaching those now takes a `ses` switch instead. A subject with no
+ * base template is unaffected.
+ *
+ * Mirrors the server's own default (`viewTargets.mjs`); keep the two in step.
  */
 export function defaultScan(scans: ScanSummary[]): ScanSummary | null {
   if (!scans.length) return null
-  // A cross-sectional scan outranks the server's own `isDefault` flag. The rule is cheap to state
-  // and the consequence of getting it wrong is silent -- the viewer would open on a plausible
-  // brain that is nobody's actual scan -- so it does not rely on the other side to hold it.
+  // Stream outranks the server's own `isDefault` flag. The rule is cheap to state and the
+  // consequence of getting it wrong is silent, so it does not rely on the other side to hold it.
+  const base = scans.find((s) => s.stream === 'base')
+  if (base) return base
   const cross = scans.filter((s) => s.stream === 'cross')
   if (cross.length) return cross.find((s) => s.isDefault) ?? cross[0]
   return scans.find((s) => s.isDefault) ?? scans[0]
