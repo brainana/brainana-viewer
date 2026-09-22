@@ -113,7 +113,10 @@ export class RoiLegend {
       ]
       if (volumeOnly) children.push(h('span', { class: 'legend-vol-only', title: 'Shown in the volume only — not on the surface' }, ['vol']))
       const el = h('button', { type: 'button', class: `legend-row${hidden ? ' hidden-roi' : ''}${volumeOnly ? ' volume-only' : ''}` }, children)
-      ;(el.querySelector('.legend-swatch') as HTMLElement).style.background = `rgb(${row.color[0]},${row.color[1]},${row.color[2]})`
+      // backgroundColor, not the `background` shorthand -- see colormapPicker.paintTrigger. A solid
+      // colour happens to repeat invisibly, so this one never showed the defect, but the shorthand
+      // resets the same longhands.
+      ;(el.querySelector('.legend-swatch') as HTMLElement).style.backgroundColor = `rgb(${row.color[0]},${row.color[1]},${row.color[2]})`
       el.dataset.roiId = String(row.id)
       this.#rowsEl.append(el)
     }

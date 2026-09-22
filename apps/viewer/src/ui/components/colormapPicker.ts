@@ -2,7 +2,7 @@
 // grouped popover of gradient swatches. Framework-free (built with the h() helper); the host
 // supplies the CSS gradient per colormap key (see data/colormap.ts + niivue buildColormapAssets).
 import { h } from '@brainana/ui/dom.ts'
-import { COLORMAP_REGISTRY, type ColormapInfo } from '../../data/colormap.ts'
+import { COLORMAP_REGISTRY, baseColormapKey, isReversedKey, type ColormapInfo } from '../../data/colormap.ts'
 
 export interface ColormapPickerOptions {
   gradients: Record<string, string>
@@ -35,15 +35,30 @@ export function createColormapPicker(opts: ColormapPickerOptions): ColormapPicke
   const pop = h('div', { class: 'cmap-pop', hidden: true })
   const element = h('div', { class: 'cmap-picker' }, [trigger, pop])
 
+  // A reversed key (`viridis_r`) is never in `infos` -- the list offers base maps only and the colour
+  // dock's toggle reaches the twins -- so resolve it through its base map rather than showing the
+  // raw key on the trigger.
   function labelFor(key: string): string {
-    return infos.find((i) => i.key === key)?.label ?? key
+    const hit = infos.find((i) => i.key === key)
+    if (hit) return hit.label
+    if (isReversedKey(key)) {
+      const base = infos.find((i) => i.key === baseColormapKey(key))
+      if (base) return `${base.label} (reversed)`
+    }
+    return key
   }
   function grad(key: string): string {
     return gradients[key] ?? FALLBACK
   }
 
+  // backgroundImage, NEVER the `background` shorthand. The shorthand resets every background
+  // longhand it does not mention back to its initial value -- including `background-origin`, which
+  // .cmap-swatch sets to border-box precisely so a 34px swatch does not size a 32px gradient tile
+  // and repeat it into the 1px border strips. Inline styles beat the stylesheet, so a shorthand
+  // here silently undoes that rule on every repaint and puts the map's LAST colour down its left
+  // edge. Guarded by tests/inline-style_test.mjs.
   function paintTrigger(): void {
-    swatch.style.background = grad(current)
+    swatch.style.backgroundImage = grad(current)
     label.textContent = labelFor(current)
   }
 
@@ -56,8 +71,9 @@ export function createColormapPicker(opts: ColormapPickerOptions): ColormapPicke
         lastGroup = info.group
       }
       const optSwatch = h('span', { class: 'cmap-swatch' })
-      optSwatch.style.background = grad(info.key)
-      const btn = h('button', { type: 'button', class: `cmap-option${info.key === current ? ' active' : ''}` }, [
+      optSwatch.style.backgroundImage = grad(info.key) // longhand -- see paintTrigger
+      const active = info.key === baseColormapKey(current)
+      const btn = h('button', { type: 'button', class: `cmap-option${active ? ' active' : ''}` }, [
         optSwatch,
         h('span', { class: 'cmap-label' }, [info.label]),
         ...(info.cyclic ? [h('span', { class: 'cmap-tag' }, ['cyclic'])] : []),

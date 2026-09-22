@@ -57,6 +57,33 @@ export function colormapInfo(key: string): ColormapInfo | undefined {
   return COLORMAP_REGISTRY.find((c) => c.key === key)
 }
 
+// --- reversed maps ----------------------------------------------------------------------------
+// Reversal is carried IN THE KEY (`viridis` → `viridis_r`) rather than as a separate flag. Every
+// apply path already takes a colormap name -- the volume's setColormap, the mesh layer's native
+// `colormap`, and the sampled-LUT path -- as do the report and the session snapshot, so a reversed
+// map needs no plumbing of its own: register the flipped table under the suffixed name and the
+// existing string carries it everywhere. The picker lists only base maps and offers a toggle.
+export const REVERSED_SUFFIX = '_r'
+
+export function isReversedKey(key: string): boolean {
+  return key.endsWith(REVERSED_SUFFIX)
+}
+
+/** The reversed twin of a key; already-reversed keys are returned unchanged (never `x_r_r`). */
+export function reversedKey(key: string): string {
+  return isReversedKey(key) ? key : key + REVERSED_SUFFIX
+}
+
+/** The forward map behind a key — the identity for a key that is not reversed. */
+export function baseColormapKey(key: string): string {
+  return isReversedKey(key) ? key.slice(0, -REVERSED_SUFFIX.length) : key
+}
+
+/** Flip a key between forward and reversed. */
+export function toggleReversedKey(key: string): string {
+  return isReversedKey(key) ? baseColormapKey(key) : reversedKey(key)
+}
+
 // Display order of the groups in the picker.
 export const GROUP_ORDER: ColormapGroup[] = [
   'Brainana',
@@ -99,7 +126,8 @@ const CURATED: Record<string, { group: ColormapGroup; label?: string }> = {
   cubehelix: { group: 'Sequential' },
   turbo: { group: 'Sequential' },
   jet: { group: 'Sequential' },
-  // Diverging
+  // Diverging — the matplotlib family, registered as custom LUTs in niivue/colormaps.ts because
+  // NiiVue itself ships only blue2red.
   blue2red: { group: 'Diverging', label: 'blue–red' },
   coolwarm: { group: 'Diverging' },
   bwr: { group: 'Diverging', label: 'BWR' },
@@ -107,6 +135,12 @@ const CURATED: Record<string, { group: ColormapGroup; label?: string }> = {
   spectral: { group: 'Diverging' },
   rdbu: { group: 'Diverging', label: 'RdBu' },
   rdylbu: { group: 'Diverging', label: 'RdYlBu' },
+  rdylgn: { group: 'Diverging', label: 'RdYlGn' },
+  rdgy: { group: 'Diverging', label: 'RdGy' },
+  prgn: { group: 'Diverging', label: 'PRGn' },
+  piyg: { group: 'Diverging', label: 'PiYG' },
+  brbg: { group: 'Diverging', label: 'BrBG' },
+  puor: { group: 'Diverging', label: 'PuOr' },
   redyellowblue: { group: 'Diverging', label: 'red–yellow–blue' },
   // Cyclic
   hsv: { group: 'Cyclic', label: 'HSV' },
@@ -123,6 +157,18 @@ export function prettifyLabel(key: string): string {
   return key.replace(/[_-]+/g, ' ')
 }
 
+/**
+ * Human name for any colormap key, reversed twins included ("coolwarm_r" → "coolwarm (reversed)").
+ * Used where a key is shown as prose rather than picked — the report, chiefly — so a reversed map
+ * does not surface as a raw suffixed key.
+ */
+export function colormapDisplayName(key: string): string {
+  const base = baseColormapKey(key)
+  const label =
+    COLORMAP_REGISTRY.find((c) => c.key === base)?.label ?? CURATED[base.toLowerCase()]?.label ?? prettifyLabel(base)
+  return isReversedKey(key) ? `${label} (reversed)` : label
+}
+
 // Build the picker registry from the maps NiiVue actually offers: Brainana maps first, then every
 // available built-in mapped to its curated group/label (unknowns → lower-cased "Other").
 export function buildColormapRegistry(availableKeys: string[]): ColormapInfo[] {
@@ -130,6 +176,9 @@ export function buildColormapRegistry(availableKeys: string[]): ColormapInfo[] {
   const builtins: ColormapInfo[] = []
   for (const key of availableKeys) {
     if (brainanaKeys.has(key)) continue
+    // Reversed twins are registered on NiiVue so they can be applied, but they are reached through
+    // the picker's reverse toggle -- listing them too would double the dropdown.
+    if (isReversedKey(key)) continue
     const curated = CURATED[key.toLowerCase()]
     builtins.push({ key, label: curated?.label ?? prettifyLabel(key), group: curated?.group ?? 'Other' })
   }

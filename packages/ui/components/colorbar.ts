@@ -50,7 +50,10 @@ export function createColorbar(label = 'Range'): Colorbar {
     hide: () => (element.hidden = true),
     set: (s) => {
       element.hidden = false
-      gradient.style.background = s.gradient
+      // Longhand, not the `background` shorthand: the shorthand resets background-origin/-clip and
+      // would clobber stylesheet rules on any bordered target. Harmless here (.colorbar-gradient is
+      // inset:0 with no border of its own) but kept uniform so the pattern is never copied.
+      gradient.style.backgroundImage = s.gradient
       const unit = s.unit ? ` ${s.unit}` : ''
       // Semantic tick labels (e.g. foot/hand/face) override the numeric readout when provided.
       if (s.ticks) {

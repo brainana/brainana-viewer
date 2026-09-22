@@ -4,7 +4,7 @@
 import { Niivue, NVImage, NVMesh, SLICE_TYPE, MULTIPLANAR_TYPE, SHOW_RENDER, NVMeshLayerDefaults } from '@niivue/niivue'
 import type { RuntimeClient } from '@brainana/core-client/runtimeClient.ts'
 import type { Layout } from '../state/store.ts'
-import { registerColormaps } from './colormaps.ts'
+import { registerColormaps, registerReversed } from './colormaps.ts'
 import { mapFunctionalDisplay, surfaceLutFromColormap, quantizeScalarToBins, maskSurfaceBinsByValue } from '../data/functional.ts'
 
 // Surface auto-fit: instead of hand-tuned per-surface/per-view zoom constants, we measure the
@@ -465,6 +465,18 @@ export class MultiView {
       if (Number.isFinite(v)) ids.add(v)
     }
     return [...ids].sort((a, b) => a - b)
+  }
+
+  /**
+   * Register a reversed twin for each colormap on BOTH instances, so the colour dock's reverse
+   * toggle works on the slices and the mesh alike (docs §4: one colour change recolours both).
+   * Called once after the view exists, before the gradients/LUTs are sampled.
+   */
+  /** Returns the keys that gained a reversed twin on BOTH instances — the rest cannot be reversed. */
+  registerReversedColormaps(keys: string[]): string[] {
+    const onSlices = new Set(registerReversed(this.slices, keys))
+    const onRender = new Set(registerReversed(this.render, keys))
+    return keys.filter((k) => onSlices.has(k) && onRender.has(k))
   }
 
   // The flat 256×4 RGBA LUT for a registered colormap (live), or null if unavailable.
