@@ -176,7 +176,17 @@ export function reportFilename(data: ReportData): string {
   // Include the scan: two reports from two timepoints of one animal are different documents and
   // must not collide in a downloads folder. The scan id already starts with the subject id, so
   // strip that prefix rather than repeating it.
-  const scan = data.dataset.scan ? safe(data.dataset.scan.id.replace(new RegExp(`^${data.dataset.subjectId ?? ''}_?`), '')) : ''
+  //
+  // Stripped with startsWith/slice rather than a RegExp built from the id: the subject id is a
+  // directory name off disk, so a `(` in it would have thrown SyntaxError out of the download
+  // handler, and a `.` would have quietly matched the wrong character.
+  const stripSubject = (id: string): string => {
+    const prefix = data.dataset.subjectId ?? ''
+    if (!prefix || !id.startsWith(prefix)) return id
+    const rest = id.slice(prefix.length)
+    return rest.startsWith('_') ? rest.slice(1) : rest
+  }
+  const scan = data.dataset.scan ? safe(stripSubject(data.dataset.scan.id)) : ''
   const stamp = data.generatedAt.slice(0, 19).replace(/[:T]/g, '-')
   return `brainana-report_${subject}${scan ? `_${scan}` : ''}_${stamp}.html`
 }
