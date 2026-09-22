@@ -122,4 +122,21 @@ function clearStorage() {
   ok('fovTooltip covers missing, expanded, degenerate and unknown-status volumes')
 }
 
+// --- a longitudinal scan never has a full-FOV conform ------------------------------------------
+// It is built in the base template's space from already-conformed volumes, so the generic
+// "reprocess with brainana 2.1 or newer" line would be advice that cannot work.
+{
+  assert.match(fovTooltip(null, 'cross'), /Reprocess with brainana/, 'the generic advice still applies to a cross-sectional scan')
+  assert.match(fovTooltip(null, null), /Reprocess with brainana/, 'and when the stream is unknown')
+  for (const stream of ['base', 'long']) {
+    const tip = fovTooltip(null, stream)
+    assert.doesNotMatch(tip, /Reprocess/i, `${stream}: does not advise a reprocess that cannot help`)
+    assert.match(tip, /base template/i, `${stream}: explains why instead`)
+  }
+  // A scan that DOES have one is unaffected by the stream.
+  const present = { url: '/x', label: 'T1w (full FOV)', status: 'expanded' }
+  assert.equal(fovTooltip(present, 'base'), fovTooltip(present, 'cross'))
+  ok('a longitudinal scan explains why it has no full-FOV conform instead of advising a reprocess')
+}
+
 console.log(`fovmode_test: ${passed} checks passed`)

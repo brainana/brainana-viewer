@@ -17,6 +17,8 @@ export interface ReportContext {
   loadedAssets: () => LoadedAsset[]
   currentReadout: () => LocationReadout | null
   viewState: () => ViewState
+  /** The longitudinal fit behind an active change map; null when none is shown. */
+  longitudinal: () => ReportData['longitudinal']
   /** The two panes, with their current visibility. */
   panes: () => { slices: PaneTarget; surface: PaneTarget }
   crosshair: () => [number, number, number] | null
@@ -129,13 +131,38 @@ export async function generateReport(ctx: ReportContext, bookmarks: Bookmark[], 
     notes.push('No brainana sidecars were found beside the loaded files, so the pipeline version could not be determined.')
   }
 
+  const longitudinal = ctx.longitudinal()
+  const view = ctx.viewState()
+  // Notes render at the very top of the document, so a reader who never scrolls to the
+  // longitudinal section still sees the caveat. That is the point of putting it here rather than
+  // only in the section it describes.
+  if (view.longitudinal && !view.longitudinal.timeInterpretable) {
+    notes.push(
+      `The change map shown is in ${view.longitudinal.unit}. brainana fit it against scan order ` +
+        `(time source: ${view.longitudinal.timeSource ?? 'unknown'}), not real elapsed time, so these ` +
+        `values are a change per scan and cannot be read as change per year.`,
+    )
+  }
+  if (longitudinal) {
+    const worst = longitudinal.agreement.length ? longitudinal.agreement.reduce((a, b) => (a.dice <= b.dice ? a : b)) : null
+    if (worst && worst.dice < 0.8) {
+      notes.push(
+        `Base segmentation agreement is low for ${worst.timepoint} (median Dice ${worst.dice.toFixed(2)}). ` +
+          `The base template's surfaces deserve a closer look before these change maps are trusted.`,
+      )
+    }
+    const skipped = Object.keys(longitudinal.skipped)
+    if (skipped.length) notes.push(`${skipped.length} session(s) were excluded from the longitudinal fit: ${skipped.join(', ')}.`)
+  }
+
   return {
     generatedAt: new Date().toISOString(),
     app: { ...ctx.app, userAgent: typeof navigator === 'undefined' ? null : navigator.userAgent },
     dataset: ctx.dataset(),
     pipelineVersions,
+    longitudinal,
     files,
-    view: ctx.viewState(),
+    view,
     current: { readout: ctx.currentReadout(), shots: currentShots },
     bookmarks: points,
     notes,
@@ -144,7 +171,22 @@ export async function generateReport(ctx: ReportContext, bookmarks: Bookmark[], 
 
 /** Default filename: identifies the subject and the moment, and sorts chronologically. */
 export function reportFilename(data: ReportData): string {
-  const subject = (data.dataset.subjectId ?? 'subject').replace(/[^A-Za-z0-9_-]+/g, '-')
+  const safe = (v: string): string => v.replace(/[^A-Za-z0-9_-]+/g, '-')
+  const subject = safe(data.dataset.subjectId ?? 'subject')
+  // Include the scan: two reports from two timepoints of one animal are different documents and
+  // must not collide in a downloads folder. The scan id already starts with the subject id, so
+  // strip that prefix rather than repeating it.
+  //
+  // Stripped with startsWith/slice rather than a RegExp built from the id: the subject id is a
+  // directory name off disk, so a `(` in it would have thrown SyntaxError out of the download
+  // handler, and a `.` would have quietly matched the wrong character.
+  const stripSubject = (id: string): string => {
+    const prefix = data.dataset.subjectId ?? ''
+    if (!prefix || !id.startsWith(prefix)) return id
+    const rest = id.slice(prefix.length)
+    return rest.startsWith('_') ? rest.slice(1) : rest
+  }
+  const scan = data.dataset.scan ? safe(stripSubject(data.dataset.scan.id)) : ''
   const stamp = data.generatedAt.slice(0, 19).replace(/[:T]/g, '-')
-  return `brainana-report_${subject}_${stamp}.html`
+  return `brainana-report_${subject}${scan ? `_${scan}` : ''}_${stamp}.html`
 }

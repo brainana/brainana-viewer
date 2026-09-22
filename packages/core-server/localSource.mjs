@@ -70,13 +70,13 @@ export class LocalDataSource {
       .sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true, sensitivity: 'base' }))
   }
 
-  async buildManifest(subjectId) {
+  async buildManifest(subjectId, { target = null } = {}) {
     const clean = cleanRelative(subjectId)
     const subjectDir = path.resolve(this.root, clean)
     if (!isWithin(this.root, subjectDir) || !this.manifest.isSubjectDir(subjectDir)) {
       throw Object.assign(new Error('Monkey not found'), { statusCode: 404 })
     }
-    return this.manifest.buildManifest({ outputRoot: this.root, subjectDir, fileUrl: (p) => this.fileUrl(p) })
+    return this.manifest.buildManifest({ outputRoot: this.root, subjectDir, fileUrl: (p) => this.fileUrl(p), targetId: target })
   }
 
   async listDirectories(rel = '') {

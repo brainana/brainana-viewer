@@ -41,11 +41,19 @@ export function resolveFovMode(preferred: FovMode, hasFullFov: boolean): FovMode
 }
 
 /**
- * Tooltip for the switch, covering the three states a user can otherwise misread: the output is
- * missing entirely, or it exists but brainana could not expand it (so flipping changes nothing).
+ * Tooltip for the switch, covering the states a user can otherwise misread: the output is missing
+ * entirely, it exists but brainana could not expand it (so flipping changes nothing), or the scan
+ * is one that never has one.
+ *
+ * `stream` is the reconstruction's stream. The base template and its base-seeded timepoints are
+ * built from already-conformed volumes, so brainana never writes an uncropped conform for them --
+ * telling someone to reprocess would be advice that cannot work.
  */
-export function fovTooltip(fullFov: FullFovVolume | null): string {
+export function fovTooltip(fullFov: FullFovVolume | null, stream: string | null = null): string {
   if (!fullFov) {
+    if (stream === 'base' || stream === 'long') {
+      return 'No full-FOV T1w for a longitudinal reconstruction — it is built in the base template’s space, from volumes that are already conformed.'
+    }
     return 'No full-FOV T1w in this dataset. Reprocess with brainana 2.1 or newer to generate one.'
   }
   if (fullFov.status === 'no_expansion_needed' || fullFov.status === 'fallback') {

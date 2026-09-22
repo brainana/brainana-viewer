@@ -10,6 +10,8 @@ import type { ColormapInfo } from '../../data/colormap.ts'
 
 export interface ColorDisplayCallbacks {
   onColormap: (key: string) => void
+  /** Flip the active colormap end-to-end (the dashboard rewrites the key and re-applies). */
+  onReverse?: () => void
   onDisplayRange: (min: number, max: number) => void
   onDisplayAuto?: () => void
   onClipRange?: (lo: number | null, hi: number | null) => void
@@ -33,6 +35,10 @@ export interface ColorDisplayTarget {
   lockMin?: boolean
   /** Override the colormaps offered by the picker (e.g. drop "labels" for a continuous atlas). */
   colormaps?: ColormapInfo[]
+  /** Is the active colormap currently reversed? Drives the toggle's pressed state. */
+  reversed?: boolean
+  /** Hide the reverse toggle (categorical atlas: there is no ramp to flip). Defaults to shown. */
+  showReverse?: boolean
   /** Clip UI variant: a full lo/hi range, or none. */
   clip: 'range' | 'none'
   clipDomain?: { min: number; max: number }
@@ -65,6 +71,11 @@ export function createColorDisplay(
   const head = h('button', { type: 'button', class: 'color-display-head' }, ['color display'])
   const resetBtn = h('button', { type: 'button', class: 'ghost sm' }, ['reset']) as HTMLButtonElement
   resetBtn.addEventListener('click', () => cb.onReset?.())
+  // Reverse is a toggle rather than a second row per map in the picker: it applies to EVERY
+  // colormap (sequential included), so listing forward and reversed twins would double a list that
+  // is already ~60 long to say one bit.
+  const reverseBtn = h('button', { type: 'button', class: 'ghost sm', title: 'Flip the colormap end to end' }, ['reverse']) as HTMLButtonElement
+  reverseBtn.addEventListener('click', () => cb.onReverse?.())
 
   const picker: ColormapPicker = createColormapPicker({ gradients, infos, onChange: (k) => cb.onColormap(k) })
   const legend: Legend = createLegend('legend')
@@ -97,7 +108,7 @@ export function createColorDisplay(
 
   const body = h('div', { class: 'color-display-body' }, [
     h('div', { class: 'field' }, [
-      h('div', { class: 'row' }, [h('span', { class: 'grow' }, ['colormap']), resetBtn]),
+      h('div', { class: 'row' }, [h('span', { class: 'grow' }, ['colormap']), reverseBtn, resetBtn]),
       picker.element,
     ]),
     legend.element,
@@ -129,6 +140,12 @@ export function createColorDisplay(
       }
       if (t.colormaps) picker.setInfos(t.colormaps)
       picker.setValue(t.colormap)
+      // Reversing a categorical label table is meaningless — it would renumber ROI colours — so the
+      // toggle follows the same continuous/ramp gate as the legend.
+      const showReverse = t.showReverse ?? t.showLegend !== false
+      reverseBtn.hidden = !showReverse
+      reverseBtn.classList.toggle('active', !!t.reversed)
+      reverseBtn.setAttribute('aria-pressed', t.reversed ? 'true' : 'false')
       // Legend — hidden when the target opts out (categorical atlas: the ROI list IS the legend, and a
       // gradient bar over label ids is misleading). legend.set() re-shows the element, so hide instead.
       if (t.showLegend === false) {

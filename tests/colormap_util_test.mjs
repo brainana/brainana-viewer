@@ -9,8 +9,7 @@ import {
   gradientFromStops,
   gradientFromRgba,
   buildColormapRegistry,
-  prettifyLabel,
-} from '../apps/viewer/src/data/colormap.ts'
+  prettifyLabel, isReversedKey, reversedKey, baseColormapKey, toggleReversedKey, colormapDisplayName } from '../apps/viewer/src/data/colormap.ts'
 
 let passed = 0
 const ok = (name) => {
@@ -68,6 +67,48 @@ ok('colormapInfo resolves keys and flags cyclic maps')
   assert.equal(weird?.label, 'weird map', 'unknown label lower-cased')
   ok('buildColormapRegistry orders brainana first, curates known maps, lower-cases unknowns')
 }
+
+// --- reversed keys ------------------------------------------------------------------------------
+// Reversal rides in the key, so these four have to agree exactly: every apply path, the report and
+// the session snapshot all just pass the string along.
+{
+  assert.equal(isReversedKey('viridis'), false)
+  assert.equal(isReversedKey('viridis_r'), true)
+  assert.equal(reversedKey('viridis'), 'viridis_r')
+  assert.equal(reversedKey('viridis_r'), 'viridis_r', 'reversing twice is still reversed, never x_r_r')
+  assert.equal(baseColormapKey('viridis_r'), 'viridis')
+  assert.equal(baseColormapKey('viridis'), 'viridis', 'identity for a forward key')
+  assert.equal(toggleReversedKey('coolwarm'), 'coolwarm_r')
+  assert.equal(toggleReversedKey('coolwarm_r'), 'coolwarm', 'the toggle round-trips')
+  // A reversed twin is registered on NiiVue so it can be applied, but must never reach the dropdown
+  // -- listing both directions of every map would double a list that is already ~60 long.
+  const reg = buildColormapRegistry(['viridis', 'viridis_r', 'coolwarm', 'coolwarm_r'])
+  assert.deepEqual(reg.filter((c) => isReversedKey(c.key)), [], 'no reversed keys are offered')
+  assert.equal(reg.filter((c) => c.key === 'viridis').length, 1)
+  ok('reversed keys round-trip and stay out of the picker list')
+}
+
+// --- the diverging family is curated -------------------------------------------------------------
+{
+  const keys = ['piyg', 'prgn', 'brbg', 'puor', 'rdgy', 'rdbu', 'rdylbu', 'rdylgn', 'spectral', 'coolwarm', 'bwr', 'seismic']
+  const reg = buildColormapRegistry(keys)
+  for (const key of keys) {
+    assert.equal(reg.find((c) => c.key === key)?.group, 'Diverging', `${key} is grouped Diverging`)
+  }
+  // Acronym-style names keep their matplotlib casing (docs/design_guideline/text-casing.md).
+  assert.equal(reg.find((c) => c.key === 'prgn')?.label, 'PRGn')
+  assert.equal(reg.find((c) => c.key === 'piyg')?.label, 'PiYG')
+  assert.equal(reg.find((c) => c.key === 'bwr')?.label, 'BWR')
+  assert.equal(reg.find((c) => c.key === 'coolwarm')?.label, 'coolwarm')
+  ok('every matplotlib diverging map lands in the Diverging group with its published casing')
+}
+
+// --- display names ------------------------------------------------------------------------------
+assert.equal(colormapDisplayName('coolwarm'), 'coolwarm')
+assert.equal(colormapDisplayName('coolwarm_r'), 'coolwarm (reversed)')
+assert.equal(colormapDisplayName('prgn_r'), 'PRGn (reversed)')
+assert.equal(colormapDisplayName('weird_map'), 'weird map', 'unknown keys still prettify')
+ok('colormapDisplayName names reversed twins in prose instead of leaking the key')
 
 assert.equal(prettifyLabel('blue2red'), 'blue2red', 'prettify simple')
 assert.equal(prettifyLabel('rd_bu'), 'rd bu', 'prettify underscores')

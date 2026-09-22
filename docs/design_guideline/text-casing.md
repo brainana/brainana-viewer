@@ -6,18 +6,24 @@ shares its UI conventions._
 ## The rule
 
 **UI labels are lowercase.** Every control label, button, dropdown option, tab, section header, and
-field label is written lowercase — e.g. `map`, `opacity`, `surface brightness`, `monkey`, `size`,
+field label is written lowercase — e.g. `map`, `opacity`, `surface brightness`, `size`,
 `mode`, `dataset`, `reset`, `add local dataset`, `polar angle`, `viridis`.
 
 ## Exceptions (kept as written)
 
 1. **Acronyms & initialisms** — `LH`, `RH`, `AP/SI/LR`, `D99`, `ARM1`–`ARM6`, `SSH/SFTP`, `HSV`,
-   `BWR`, `RdBu`, `RdYlBu`, `L/R`, `3D`, and the statistical `F` in `F-stat`. Keep their casing.
+   `L/R`, `3D`, and the statistical `F` in `F-stat`. The matplotlib diverging names go here too:
+   `BWR`, `RdBu`, `RdYlBu`, `RdYlGn`, `RdGy`, `PRGn`, `PiYG`, `BrBG`, `PuOr`. Keep their casing —
+   they are published names, and lower-casing `PiYG` to `piyg` makes it unrecognisable against the
+   matplotlib reference. `coolwarm`, `seismic` and `spectral` are ordinary words and stay lowercase.
 2. **Proper product name** — `Brainana Viewer` (the brand). Not a label — leave it.
 3. **Full-sentence prose is NOT a label** — help text, empty/error/status messages, and descriptive
    tooltips (e.g. "Surface on top, planes in a row", "No datasets yet.") stay normal sentence case.
    Lowercasing whole sentences reads as broken text.
-4. **Info bottom panel** — its readout `dl` labels and the coordinate editor (`X (mm)`, `hemi`, …)
+4. **Toolbar subject cluster** — `sub` and `ses` (BIDS-style shorthand for the subject and
+   scan/reconstruction pickers). The ses control still selects a reconstruction, not BIDS `ses`
+   alone; tooltips carry the full meaning.
+5. **Info bottom panel** — its readout `dl` labels and the coordinate editor (`X (mm)`, `hemi`, …)
    are the deliberate lowercase/instrument style and are left as-is. Its column `h3`s
    (`Coordinates`, `Atlas`, `Surface`, `Func Map`, `Visual field`) are Title Case in source and
    CSS-uppercased like the other sub-headers.
@@ -26,7 +32,8 @@ field label is written lowercase — e.g. `map`, `opacity`, `surface brightness`
 
 - **Colormap display names are lowercased** — `viridis`, `plasma`, `turbo`, `gray`, `blue–red`,
   etc. — even though they're technically proper names. Their acronym variants stay (`BWR`, `RdBu`,
-  `RdYlBu`, `HSV`). Source: [data/colormap.ts](../../apps/viewer/src/data/colormap.ts) (`label`
+  `RdYlBu`, `PRGn`, `PiYG`, `BrBG`, `PuOr`, `RdGy`, `RdYlGn`, `HSV`). A reversed map is named from
+  its base plus a lowercase suffix — `PRGn (reversed)`. Source: [data/colormap.ts](../../apps/viewer/src/data/colormap.ts) (`label`
   fields + `prettifyLabel()`, which now lower-cases unknown maps instead of title-casing).
 - **Section headers rendered ALL CAPS by CSS** (`.side-panel-head`, `.color-display-head`,
   `.info-col h3`, `.cmap-group`, …) — their `text-transform: uppercase` is a separate presentation

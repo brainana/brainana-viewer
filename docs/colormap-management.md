@@ -38,12 +38,26 @@ identical colors. Bin 0 is reserved **transparent** everywhere (the no-data / ma
 | Concern | Where | Notes |
 |---|---|---|
 | Custom Brainana colormaps (stops) | `niivue/colormaps.ts` | `ECCENTRICITY_STOPS`, `SOMATOTOPY_STOPS` (reversed eccentricity), `POLAR_STOPS` (cyclic wheel), `POLAR_LR_STOPS` (L/R split), `CURVATURE_BINARY`. Assembled into `COLORMAPS` and installed with `registerColormaps(nv)`. |
+| matplotlib diverging maps | `niivue/colormaps.ts` | `DIVERGING_STOPS` — the twelve matplotlib diverging maps (`coolwarm`, `bwr`, `seismic`, `spectral`, `rdbu`, `rdylbu`, `rdylgn`, `rdgy`, `prgn`, `piyg`, `brbg`, `puor`), from matplotlib's own anchors. NiiVue ships only `blue2red`. They join `COLORMAPS`, so `registerColormaps(nv)` installs them too. |
+| Reversed twins | `niivue/colormaps.ts` + `data/colormap.ts` | `reverseColormap(rgba)` / `registerReversed(nv, keys)` build a `<key>_r` for every map; `MultiView.registerReversedColormaps` installs them on **both** instances. Key helpers (`reversedKey`, `baseColormapKey`, `toggleReversedKey`, `isReversedKey`) are pure and live in `data/colormap.ts`. |
 | Sampling to previews + LUTs | `niivue/colormaps.ts` | `buildColormapAssets(nv, keys)` samples each registered map once into `{ gradients, luts }`. `availableColormaps(nv)` lists what NiiVue knows. |
 | Catalog metadata | `data/colormap.ts` | `ColormapInfo` (key/label/group), `BRAINANA_COLORMAPS`, `BUILTIN_COLORMAPS`, `COLORMAP_REGISTRY`, group ordering (`GROUP_ORDER`), `buildColormapRegistry(availableKeys)` (Brainana first, then whatever NiiVue reports), and preview helpers `gradientFromStops` / `gradientFromRgba`. |
 | Runtime asset store | `ui/dashboard.ts` | `colormapLuts`, `colormapGradients`, `colormapInfos` — built once after the view exists (from `buildColormapAssets` + `buildColormapRegistry`) and handed to the color-display picker. Live fallback for an unsampled key: `view.colormapLut(name)` (`multiView.ts`). |
 
 The Brainana keys you will see referenced: `brainana_polar_lr`, `brainana_polar_angle`,
 `brainana_eccentricity`, `brainana_somatotopy`, `brainana_curvature`.
+
+**Reversal rides in the key.** `viridis_r` is a real registered colormap, not a flag — so every
+apply path (volume `setColormap`, native mesh `layer.colormap`, the sampled-LUT path), the report
+and the session snapshot carry it with no extra plumbing. The split that makes this work: **`colormapInfos`
+is what the picker LISTS (base maps only), `colormapGradients`/`colormapLuts` is what can be
+RENDERED (both directions)**. `buildColormapRegistry` filters reversed keys out of the list, and the
+colour dock's `reverse` toggle rewrites the active key through the *same* `onColormap` handler.
+
+**A diverging map's neutral colour must sit at index 128.** `buildColormap` spaces stops evenly over
+1..255, so that holds exactly when a map has an **odd** number of stops — which is why every entry in
+`DIVERGING_STOPS` has one, and why `tests/colormaps_test.mjs` asserts it. Signed overlays pair these
+with `symmetricRobustRange`, and it is that pairing that puts zero on the neutral colour.
 
 ---
 
@@ -203,20 +217,24 @@ hidden clip) simply blanks its grid cells.
    its default `colormap: 'gray'` has bin 0 = **opaque black**, which blacks out the whole surface —
    which is exactly why `#applyLabelLutAt` must succeed (its failure is now logged via
    `console.warn`, not swallowed).
-2. **`makeLabelLut` clamps ids above `global_max`.** NiiVue builds the mesh LUT with
+2. **Reversal must not move index 0.** `reverseColormap` flips entries 1..n-1 and leaves index 0
+   exactly where it is. Index 0 is the reserved masked / no-data *slot*, not a colour — reversing it
+   along with the rest would drop transparency into the middle of the ramp and paint the map's first
+   colour onto every masked vertex.
+3. **`makeLabelLut` clamps ids above `global_max`.** NiiVue builds the mesh LUT with
    `makeLabelLut(table, 255, layer.global_max)`; ids above `global_max` collapse to one color. For
    split-id atlases (e.g. MacBNA left ≤152 / right up to 304, D99) `#applyLabelLutAt` **forces** each
    layer's `global_max` to span the colortable so both hemispheres get the full LUT. Do not remove
    that.
-3. **Never fire two concurrent `applyFunctionSurface()`.** The function surface layer inits with
+4. **Never fire two concurrent `applyFunctionSurface()`.** The function surface layer inits with
    `colormap: 'gray'` and the transparent colortable is applied afterward; a second concurrent call
    can lose the race and leave the gray colormap (opaque black). `selectFunction` applies the surface
    exactly once (via `applyFunctionColor`); restore/override settings are threaded *through*
    `selectFunction(choice, preserve)`, never applied by a second pass.
-4. **Volume `cal_min`/`cal_max` for func stay at the natural range.** Display windowing is a color
+5. **Volume `cal_min`/`cal_max` for func stay at the natural range.** Display windowing is a color
    remap (`mapFunctionalDisplay`), not a cal change — this keeps index-0 reserved for masking. The
    surface mirrors it via the `range` arg to `quantizeFunctionalSurfaceValues`.
-5. **Same colormap → same colors on vol + surf.** Continuous overlays must both go through
+6. **Same colormap → same colors on vol + surf.** Continuous overlays must both go through
    `#surfaceColortableFromColormap` (or the same sampled LUT) and the same `quantizeScalarToBins`
    quantization, or the mesh and slices drift apart.
 
@@ -226,6 +244,13 @@ hidden clip) simply blanks its grid cells.
 
 - **Add a colormap**: add stops + a `COLORMAPS` entry in `niivue/colormaps.ts` (custom) or rely on a
   NiiVue built-in; add a `ColormapInfo` to `data/colormap.ts` so it shows in the picker with a group.
+- **Add a diverging map**: add its stops to `DIVERGING_STOPS` (`niivue/colormaps.ts`) with an **odd**
+  stop count so the neutral colour lands on index 128, and a `CURATED` row in `data/colormap.ts`
+  grouping it `Diverging`. Take the stops from matplotlib rather than eyeballing them — an off-centre
+  neutral reads as signal. Nothing else is needed: the reversed twin is derived automatically.
+- **Reverse a colormap**: nothing to add. `registerReversedColormaps` builds a `<key>_r` for every
+  map at startup, and the dock's toggle flips the active key. If a map should NOT be reversible,
+  hide the toggle for that target with `ColorDisplayTarget.showReverse: false`.
 - **Change a morphology default**: edit `MORPH_DEFAULT_COLORMAP` in `multiView.ts` (the only place).
 - **Change a function map's default colormap**: edit `mode.colormap` in `functionalModes`
   (`data/functional.ts`).

@@ -510,7 +510,11 @@ export function createServer({ token = null, distRoot = null, initialSources = [
         }
         try {
           if (action === 'monkeys') return sendJson(res, 200, await source.listMonkeys())
-          if (action === 'manifest') return sendJson(res, 200, await source.buildManifest(decodeURIComponent(tail || '')))
+          // `?scan=` selects one of the subject's reconstructions; absent means its default.
+          // The id is matched against the enumerated set by the manifest provider and is never
+          // turned into a path, so it needs no containment check of its own.
+          if (action === 'manifest')
+            return sendJson(res, 200, await source.buildManifest(decodeURIComponent(tail || ''), { target: url.searchParams.get('scan') }))
           if (action === 'directories') return sendJson(res, 200, await source.listDirectories(url.searchParams.get('path') || ''))
           if (action === 'import-files') return sendJson(res, 200, await source.listImportFiles(url.searchParams.get('path') || '', url.searchParams.get('q') || ''))
           if (action === 'save-list') return sendJson(res, 200, await source.saveList(url.searchParams.get('path') || ''))

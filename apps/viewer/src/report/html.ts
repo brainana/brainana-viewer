@@ -7,6 +7,8 @@
 import type { AtlasReadout, FileInfo, HeaderInfo, LocationReadout, PaneShots, ReportData, ViewState } from './model.ts'
 import { bookmarkName } from './bookmarks.ts'
 import { formatResolution } from './header.ts'
+import { colormapDisplayName } from '../data/colormap.ts'
+import { statisticShortLabel, type Statistic } from '../data/longitudinal.ts'
 
 const EM_DASH = '—'
 
@@ -137,7 +139,7 @@ function viewSection(view: ViewState): string {
   if (view.atlas) {
     rows.push([
       'atlas overlay',
-      `${esc(view.atlas.name)} <span class="muted">(${view.atlas.continuous ? 'continuous' : 'parcellation'}, colormap ${esc(view.atlas.colormap)}, opacity ${fmt(view.atlas.opacity, 2)}${view.atlas.hiddenRois ? `, ${view.atlas.hiddenRois} ROI(s) hidden` : ''})</span>`,
+      `${esc(view.atlas.name)} <span class="muted">(${view.atlas.continuous ? 'continuous' : 'parcellation'}, colormap ${esc(colormapDisplayName(view.atlas.colormap))}, opacity ${fmt(view.atlas.opacity, 2)}${view.atlas.hiddenRois ? `, ${view.atlas.hiddenRois} ROI(s) hidden` : ''})</span>`,
     ])
     if (view.atlas.displayRange) rows.push(['atlas display range', `${fmt(view.atlas.displayRange.min, 3)} … ${fmt(view.atlas.displayRange.max, 3)}`])
     rows.push(['atlas clip', clipText(view.atlas.clip)])
@@ -148,13 +150,13 @@ function viewSection(view: ViewState): string {
     'morphology shading',
     view.morphology.metric === 'none'
       ? '<span class="muted">none</span>'
-      : `${esc(view.morphology.metric)}${view.morphology.metric === 'curvature' ? ` · ${esc(view.morphology.curvatureStyle)}` : ''}${view.morphology.colormap ? ` <span class="muted">(colormap ${esc(view.morphology.colormap)})</span>` : ''}`,
+      : `${esc(view.morphology.metric)}${view.morphology.metric === 'curvature' ? ` · ${esc(view.morphology.curvatureStyle)}` : ''}${view.morphology.colormap ? ` <span class="muted">(colormap ${esc(colormapDisplayName(view.morphology.colormap))})</span>` : ''}`,
   ])
   if (view.morphology.range) rows.push(['morphology range', `${fmt(view.morphology.range.min, 3)} … ${fmt(view.morphology.range.max, 3)}`])
   if (view.function) {
     rows.push([
       'function overlay',
-      `${esc(view.function.kind)} · ${esc(view.function.mode)} <span class="muted">(colormap ${esc(view.function.colormap)}, opacity ${fmt(view.function.opacity, 2)}, brightness ${fmt(view.function.brightness, 2)})</span>`,
+      `${esc(view.function.kind)} · ${esc(view.function.mode)} <span class="muted">(colormap ${esc(colormapDisplayName(view.function.colormap))}, opacity ${fmt(view.function.opacity, 2)}, brightness ${fmt(view.function.brightness, 2)})</span>`,
     ])
     rows.push(['F-stat threshold', fmt(view.function.threshold, 2)])
     if (view.function.displayRange) rows.push(['function display range', `${fmt(view.function.displayRange.min, 3)} … ${fmt(view.function.displayRange.max, 3)}`])
@@ -494,6 +496,81 @@ export function subjectPath(data: ReportData): string | null {
 }
 
 /** Build the complete report document. Self-contained: no network references, no script. */
+
+// How each reconstruction stream reads in prose. A report outlives the viewer that made it, so
+// "ses-002 (long)" on its own is not enough -- the reader years later needs to know a base-seeded
+// reconstruction is in the subject's base space.
+const SCAN_STREAM_NOTE: Record<string, string> = {
+  cross: 'cross-sectional, in its own space',
+  base: 'within-subject base template',
+  long: 'base-seeded, in the base template\u2019s space',
+}
+
+function scanText(data: ReportData): string {
+  const scan = data.dataset.scan
+  if (!scan) return '<span class="muted">not recorded</span>'
+  const note = SCAN_STREAM_NOTE[scan.stream]
+  return `${esc(scan.label)}${note ? ` <span class="muted">(${esc(note)})</span>` : ''}`
+}
+
+// The longitudinal fit behind an active change map: what was fitted, over what, and -- first,
+// because it governs how every number below reads -- whether the times were real elapsed time.
+function longitudinalSection(data: ReportData): string {
+  const fit = data.longitudinal
+  const view = data.view.longitudinal
+  if (!fit || !view) return ''
+  const caveat = view.timeInterpretable
+    ? ''
+    : `<p class="warn"><strong>Rates are per scan, not per unit time.</strong> brainana fit this map against scan order (time source: ${esc(
+        String(view.timeSource ?? 'unknown'),
+      )}), so the values below are a change per scan and cannot be read as change per year.</p>`
+  const timeRows = fit.timepoints.map((tp) => `<li>${esc(tp)} <span class="muted">t = ${esc(String(fit.times[tp] ?? '?'))}</span></li>`).join('')
+  const summary = dl([
+    ['map', `${esc(view.measure)} ${esc(view.statistic)}`],
+    ['units', view.unit ? esc(view.unit) : '<span class="muted">unitless</span>'],
+    // Named for the same reason the other three overlays name theirs, and more urgently: this is
+    // the one map whose colour carries a SIGN, so without the colormap a reader cannot tell
+    // red-is-increase from red-is-decrease -- and the reverse toggle makes either possible.
+    ['colormap', view.colormap ? esc(colormapDisplayName(view.colormap)) : '<span class="muted">not recorded</span>'],
+    ['display range', view.displayRange ? `${fmt(view.displayRange.min, 3)} … ${fmt(view.displayRange.max, 3)}` : '<span class="muted">not recorded</span>'],
+    ['time source', text(view.timeSource)],
+    ['timepoints', String(fit.timepoints.length)],
+    [
+      'threshold',
+      view.threshold > 0
+        ? `|${esc(statisticShortLabel(view.statistic as Statistic))}| \u2265 ${esc(view.threshold.toPrecision(3))}`
+        : '<span class="muted">none</span>',
+    ],
+  ])
+  // The table is scoped to ONE FreeSurfer stat (see PRIMARY_STAT), so name it once in the heading
+  // rather than on every row -- without it a reader cannot tell ThickAvg from ThickStd.
+  const roiStat = fit.roiRates[0]?.measure ?? ''
+  const roi = fit.roiRates.length
+    ? `<h3>ROI fits${roiStat ? ` <span class="muted">(${esc(roiStat)})</span>` : ''}</h3>
+<table class="roi-rates"><thead><tr><th>roi</th><th>hemi</th><th>rate${view.unit ? ` (${esc(view.unit)})` : ''}</th><th>mean</th><th>% change</th><th>n</th></tr></thead><tbody>${fit.roiRates
+        .map(
+          (r) =>
+            `<tr><td>${esc(r.roi)}</td><td>${esc(r.hemi)}</td><td class="num">${esc(fmt(r.slope, 4))}</td><td class="num">${esc(
+              fmt(r.mean, 3),
+            )}</td><td class="num">${esc(fmt(r.spc, 3))}</td><td class="num">${esc(String(r.nTimepoints))}</td></tr>`,
+        )
+        .join('')}</tbody></table>`
+    : ''
+  const agreement = fit.agreement.length
+    ? `<h3>Base segmentation agreement</h3><ul class="plain">${fit.agreement
+        .map((a) => `<li>${esc(a.timepoint)} <span class="muted">median Dice ${esc(a.dice.toFixed(3))}</span></li>`)
+        .join('')}</ul>`
+    : ''
+  return `<section>
+<h2>Longitudinal change</h2>
+${caveat}
+${summary}
+<h3>Timepoints</h3><ul class="plain">${timeRows}</ul>
+${roi}
+${agreement}
+</section>`
+}
+
 export function buildReportHtml(data: ReportData): string {
   const subject = data.dataset.subjectLabel ?? data.dataset.subjectId ?? 'unknown subject'
   const title = `Brainana Viewer report — ${subject}`
@@ -507,6 +584,7 @@ export function buildReportHtml(data: ReportData): string {
     ['dataset', `${text(data.dataset.sourceLabel)}${data.dataset.sourceType ? ` <span class="muted">(${esc(data.dataset.sourceType)})</span>` : ''}`],
     ['subject', text(data.dataset.subjectId)],
     ['session', text(data.dataset.session)],
+    ['scan', scanText(data)],
   ])
 
   const notes = data.notes.length ? `<div class="notes"><ul>${data.notes.map((note) => `<li>${esc(note)}</li>`).join('')}</ul></div>` : ''
@@ -531,7 +609,9 @@ export function buildReportHtml(data: ReportData): string {
 <body>
 <header>
 <h1>Brainana Viewer report</h1>
-<p class="subtitle">${esc(subject)}${data.dataset.session ? ` · ${esc(data.dataset.session)}` : ''}</p>
+<p class="subtitle">${esc(subject)}${data.dataset.session ? ` · ${esc(data.dataset.session)}` : ''}${
+  data.dataset.scan && data.dataset.scan.stream !== 'cross' ? ` · ${esc(data.dataset.scan.label)}` : ''
+}</p>
 ${meta}
 </header>
 <main>
@@ -539,6 +619,7 @@ ${notes}
 ${filesSection(data.files)}
 ${locationsSection(data)}
 ${viewSection(data.view)}
+${longitudinalSection(data)}
 </main>
 <footer>
 <p>Generated by ${esc(data.app.name)} ${esc(data.app.version)} from output of the Brainana preprocessing pipeline. If you use these results in your research, please cite both the Brainana Viewer and the Brainana pipeline.</p>

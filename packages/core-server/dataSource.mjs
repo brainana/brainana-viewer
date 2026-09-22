@@ -5,7 +5,7 @@
 //
 // A DataSource implements:
 //   async listMonkeys()                      -> [{ id, label, relativePath, session? }]
-//   async buildManifest(subjectId)           -> manifest object (source-scoped URLs)
+//   async buildManifest(subjectId, { target })           -> manifest object (source-scoped URLs)
 //   async listDirectories(rel)               -> { path, displayPath, parent, selectable, entries }
 //   async listImportFiles(rel, q)            -> { path, displayPath, parent, entries }
 //   async openFile(rel, rangeHeader)         -> { total, contentType, start, end, partial, stream }

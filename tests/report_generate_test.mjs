@@ -1,7 +1,7 @@
 // Unit tests for collectFiles (apps/viewer/src/report/generate.ts): which loaded assets earn a card,
 // how sidecar lookups are deduplicated, and where the dataset's pipeline version comes from.
 import assert from 'node:assert/strict'
-import { collectFiles } from '../apps/viewer/src/report/generate.ts'
+import { collectFiles, generateReport, reportFilename } from '../apps/viewer/src/report/generate.ts'
 
 let passed = 0
 const ok = (name) => {
@@ -122,5 +122,75 @@ assert.equal(noUrl.files.length, 1)
 assert.equal(noUrl.files[0].path, '—')
 assert.deepEqual(noUrl.files[0].generatedBy, [])
 ok('an asset without a URL is described without provenance instead of throwing')
+
+// --- the filename names the scan -----------------------------------------------------------
+// Two reports from two timepoints of one animal are different documents; colliding in a downloads
+// folder would make one silently overwrite the other.
+{
+  const base = { generatedAt: '2026-09-20T11:22:33.000Z', dataset: { subjectId: 'sub-032309m', scan: null } }
+  assert.equal(reportFilename(base), 'brainana-report_sub-032309m_2026-09-20-11-22-33.html')
+
+  const withScan = (id) => reportFilename({ ...base, dataset: { subjectId: 'sub-032309m', scan: { id } } })
+  // The scan id already starts with the subject id, so it is stripped rather than repeated.
+  assert.equal(withScan('sub-032309m_ses-003_long'), 'brainana-report_sub-032309m_ses-003_long_2026-09-20-11-22-33.html')
+  assert.equal(withScan('sub-032309m_base'), 'brainana-report_sub-032309m_base_2026-09-20-11-22-33.html')
+  // A subject-level scan id IS the subject id; nothing is left to add.
+  assert.equal(withScan('sub-032309m'), 'brainana-report_sub-032309m_2026-09-20-11-22-33.html')
+  // Two timepoints must not produce the same name.
+  assert.notEqual(withScan('sub-032309m_ses-001_long'), withScan('sub-032309m_ses-003_long'))
+  // Whatever a scan id contains, the result stays a safe filename.
+  const nasty = reportFilename({ ...base, dataset: { subjectId: 'sub-a', scan: { id: 'sub-a_../../etc/passwd' } } })
+  assert.equal(/[/\\]/.test(nasty), false, 'no path separators survive into the filename')
+  ok('the report filename names the scan, so two timepoints cannot collide')
+}
+
+// --- the time-source caveat reaches `notes` -----------------------------------------------------
+// The caveat is rendered in the longitudinal section (covered in report_html_test), but the claim
+// that matters is that it ALSO lands in `notes`, which render above the fold. A reader who never
+// scrolls to the longitudinal section must still be told the rates are per scan. Nothing tested
+// that end to end: the html test hands `notes` in ready-made.
+{
+  const ctx = (longitudinal, viewLong) => ({
+    apiFetch: () => Promise.reject(new Error('no sidecars in this fixture')),
+    app: { name: 'brainana-viewer', version: '0.0.0', buildId: null },
+    dataset: () => ({ subjectId: 'sub-x', subjectLabel: 'x', session: null, scan: null, synthesisLevel: null, sourceLabel: 'l', sourceType: 'local', relativePath: null }),
+    loadedAssets: () => [],
+    currentReadout: () => null,
+    viewState: () => ({ longitudinal: viewLong, atlas: null, function: null, morphology: { metric: 'none' }, camera: null, markerMode: 'none' }),
+    longitudinal: () => longitudinal,
+    panes: () => ({ slices: null, surface: null }),
+    crosshair: () => null,
+    moveCrosshair: () => {},
+  })
+  const fit = { timepoints: ['ses-001'], times: { 'ses-001': 0 }, timeSource: 'scan order', timeInterpretable: false, skipped: {}, roiRates: [], agreement: [] }
+  const viewLong = { measure: 'thickness', statistic: 'rate', colormap: 'bwr', displayRange: null, threshold: 0, opacity: 1, unit: 'mm per scan', timeSource: 'scan order', timeInterpretable: false }
+  const opts = { includeScreenshots: false }
+
+  const bad = await generateReport(ctx(fit, viewLong), [], opts)
+  const caveat = bad.notes.find((n) => /per scan/i.test(n))
+  assert.ok(caveat, 'the caveat is in notes, not only in the longitudinal section')
+  assert.match(caveat, /mm per scan/, 'and it carries the unit the map is actually in')
+  assert.match(caveat, /scan order/, 'and names the time source brainana fell back to')
+  assert.match(caveat, /cannot be read as change per year/, 'and says plainly what it may not be read as')
+
+  // The mirror image: a real time column must NOT produce the caveat, or it becomes noise.
+  const good = await generateReport(
+    ctx({ ...fit, timeSource: 'age', timeInterpretable: true }, { ...viewLong, unit: 'mm per year', timeSource: 'age', timeInterpretable: true }),
+    [],
+    opts,
+  )
+  assert.equal(good.notes.some((n) => /per scan/i.test(n)), false, 'an interpretable time source adds no caveat')
+  ok('the per-scan caveat propagates into notes, and only when the time source warrants it')
+
+  // Low base-segmentation agreement is its own note, and the excluded sessions are named.
+  const flagged = await generateReport(
+    ctx({ ...fit, agreement: [{ timepoint: 'ses-002', dice: 0.41 }], skipped: { 'ses-009': 'no anat' } }, viewLong),
+    [],
+    opts,
+  )
+  assert.ok(flagged.notes.some((n) => /ses-002/.test(n) && /0\.41/.test(n)), 'the worst timepoint is named with its Dice')
+  assert.ok(flagged.notes.some((n) => /ses-009/.test(n)), 'and excluded sessions are listed')
+  ok('low base-segmentation agreement and excluded sessions each earn a note')
+}
 
 console.log(`\nreport_generate_test: ${passed} checks passed`)

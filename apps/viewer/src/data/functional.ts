@@ -264,3 +264,20 @@ export function maskSurfaceBinsByF(bins: Float32Array, fstat: ArrayLike<number>,
   }
   return out
 }
+
+// Magnitude threshold on the surface: keep a vertex only where |value| >= threshold; otherwise
+// force bin 0 (transparent).
+//
+// This is the COMPLEMENT of maskSurfaceBinsByValue, and that is why it exists rather than reusing
+// it: a value-clip keeps what is inside a window, while thresholding a signed change map has to
+// hide what is inside the window — the near-zero middle — and keep both tails. A threshold of 0
+// is a pass-through, so the control has a natural "show everything" position.
+export function maskSurfaceBinsByMagnitude(bins: Float32Array, values: ArrayLike<number>, threshold: number): Float32Array {
+  if (!(threshold > 0)) return bins
+  const out = new Float32Array(bins.length)
+  for (let i = 0; i < bins.length; i++) {
+    const v = values[i]
+    out[i] = Number.isFinite(v) && Math.abs(v) >= threshold ? bins[i] : 0
+  }
+  return out
+}

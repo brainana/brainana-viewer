@@ -4,7 +4,7 @@
 import { Niivue, NVImage, NVMesh, SLICE_TYPE, MULTIPLANAR_TYPE, SHOW_RENDER, NVMeshLayerDefaults } from '@niivue/niivue'
 import type { RuntimeClient } from '@brainana/core-client/runtimeClient.ts'
 import type { Layout } from '../state/store.ts'
-import { registerColormaps } from './colormaps.ts'
+import { registerColormaps, registerReversed } from './colormaps.ts'
 import { mapFunctionalDisplay, surfaceLutFromColormap, quantizeScalarToBins, maskSurfaceBinsByValue } from '../data/functional.ts'
 
 // Surface auto-fit: instead of hand-tuned per-surface/per-view zoom constants, we measure the
@@ -177,11 +177,13 @@ export class MultiView {
   // Source URLs of everything currently loaded, recorded at load time. NiiVue's NVImage/NVMesh
   // do not retain the URL they were fetched from, and the report has to name the files it
   // describes — so each loader stamps its URL here. Purely descriptive; nothing renders from it.
-  #urls: { base: string | null; atlas: string | null; atlasName: string | null; functional: string | null; surface: SurfacePairUrls | null; report: Map<string, string> } = {
+  #urls: { base: string | null; atlas: string | null; atlasName: string | null; functional: string | null; change: SurfacePairUrls | null; changeName: string | null; surface: SurfacePairUrls | null; report: Map<string, string> } = {
     base: null,
     atlas: null,
     atlasName: null,
     functional: null,
+    change: null,
+    changeName: null,
     surface: null,
     report: new Map(),
   }
@@ -465,6 +467,18 @@ export class MultiView {
     return [...ids].sort((a, b) => a - b)
   }
 
+  /**
+   * Register a reversed twin for each colormap on BOTH instances, so the colour dock's reverse
+   * toggle works on the slices and the mesh alike (docs §4: one colour change recolours both).
+   * Called once after the view exists, before the gradients/LUTs are sampled.
+   */
+  /** Returns the keys that gained a reversed twin on BOTH instances — the rest cannot be reversed. */
+  registerReversedColormaps(keys: string[]): string[] {
+    const onSlices = new Set(registerReversed(this.slices, keys))
+    const onRender = new Set(registerReversed(this.render, keys))
+    return keys.filter((k) => onSlices.has(k) && onRender.has(k))
+  }
+
   // The flat 256×4 RGBA LUT for a registered colormap (live), or null if unavailable.
   colormapLut(name: string): Uint8ClampedArray | null {
     try {
@@ -736,6 +750,13 @@ export class MultiView {
       if (!pair) continue
       out.push({ role: `morphometry: ${metric} (left)`, url: pair.left, hdr: null, mesh: null })
       out.push({ role: `morphometry: ${metric} (right)`, url: pair.right, hdr: null, mesh: null })
+    }
+    // Same shape as the morphometry entries: per-hemisphere .shape.gii layers with no geometry of
+    // their own. Listed so the report can name the change map it is showing.
+    if (this.#urls.change) {
+      const name = this.#urls.changeName ?? 'change'
+      out.push({ role: `longitudinal: ${name} (left)`, url: this.#urls.change.left, hdr: null, mesh: null })
+      out.push({ role: `longitudinal: ${name} (right)`, url: this.#urls.change.right, hdr: null, mesh: null })
     }
     return out
   }
@@ -1164,6 +1185,31 @@ export class MultiView {
     this.#funcLayerIndex = idx
     this.#funcLayerKey = key
     return true
+  }
+
+  /**
+   * Paint a longitudinal change map on the surface.
+   *
+   * Deliberately the SAME layer slot as the functional map rather than one of its own. The two are
+   * both "a value overlay on the mesh" and only one may be shown at a time, and routing them
+   * through one slot makes that structural instead of a rule the dashboard has to remember:
+   * #ensureFunctionLayer drops the previous layer whenever the key changes.
+   *
+   * It also sidesteps a latent bug. #removeAtlasSurfaceLayer splices the atlas layer out of
+   * mesh.layers WITHOUT decrementing #funcLayerIndex, which is harmless only because an atlas
+   * overlay and a value overlay never coexist. A second independent value layer would make that
+   * reachable.
+   */
+  async setChangeSurface(key: string, pair: SurfacePairUrls, leftBins: Float32Array, rightBins: Float32Array, lut: Uint8ClampedArray, opacity: number): Promise<void> {
+    this.#urls.change = pair
+    this.#urls.changeName = key
+    await this.setFunctionSurface(`long:${key}`, pair, leftBins, rightBins, lut, opacity)
+  }
+
+  clearChangeSurface(): void {
+    this.#urls.change = null
+    this.#urls.changeName = null
+    this.clearSurfaceFunctionLayers()
   }
 
   // Show the function-on-surface layer: load once for `key`, then swap in the F-masked bins and

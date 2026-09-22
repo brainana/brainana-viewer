@@ -26,6 +26,21 @@ const SURF_FILES = new Set([
   'lh.thickness', 'rh.thickness',
 ])
 
+// Longitudinal change maps: the server PARSES these (MGH -> GIFTI), so a sparse placeholder has no
+// bytes to read. The ROI-rate CSVs beside them are deliberately NOT here -- they are handed to the
+// client as URLs and fetched on demand like any other data file.
+const LONG_MAP_RE = /^(lh|rh)\.long\..+\.mgh$/i
+
+// Recon subtrees that are pure noise, and expensive: a base template carries all four. Skipping
+// them cuts the listing round-trips, which are what a slow link actually pays for.
+const RECON_NOISE_DIRS = new Set(['tmp', 'trash', 'touch', 'bak'])
+
+// Does the manifest provider need to READ this file's bytes, as opposed to merely see that it
+// exists at its true size?
+function needsRealBytes(name, size) {
+  return SURF_FILES.has(name) || LONG_MAP_RE.test(name) || isReadableSidecar(name, size)
+}
+
 // Sidecars the manifest provider READS rather than merely lists (brainana writes a .json beside
 // each output; buildManifest parses e.g. FullFOVPadding.status out of it). A sparse placeholder has
 // no bytes to parse, so these are fetched for real — they are metadata, measured in hundreds of
@@ -228,13 +243,14 @@ export class SftpDataSource {
   }
 
   // ---- manifest via materialisation ----
-  async #listRemoteRecursive(rel, maxDepth) {
+  async #listRemoteRecursive(rel, maxDepth, skipDirs = new Set()) {
     const out = []
     const walk = async (currentRel, depth) => {
       if (depth < 0) return
       const list = await this.client.list(this.#remoteAbs(currentRel)).catch(() => [])
       for (const e of list) {
         if (e.name.startsWith('.')) continue
+        if (e.type === 'directory' && skipDirs.has(e.name)) continue
         const childRel = [currentRel, e.name].filter(Boolean).join('/')
         out.push({ ...e, relativePath: childRel })
         if (e.type === 'directory') await walk(childRel, depth - 1)
@@ -283,7 +299,7 @@ export class SftpDataSource {
     this.placeholders.set(abs, rel)
   }
 
-  async #materialize(subjectId) {
+  async #materialize(subjectId, targetId = null) {
     const clean = cleanRelative(subjectId)
     // Mirror the subject subtree (anat + any ses-*/anat) as placeholders.
     const subjectEntries = await this.#listRemoteRecursive(clean, 5)
@@ -300,21 +316,59 @@ export class SftpDataSource {
       this.#addPlaceholder(e.relativePath, 'file', e.size)
     }
 
-    // Fetch real surface binaries so ensureDerivedAssets can parse them.
-    const fsRel = `fastsurfer/${clean}`
-    if (!(await this.client.exists(this.#remoteAbs(fsRel)))) {
+    // Pass 2 -- the recon SKELETON. One listing of fastsurfer/, then directory placeholders for
+    // every recon belonging to this subject. No file bytes and no recursion: this exists purely so
+    // the manifest provider can SEE which reconstructions are present, which is what it enumerates
+    // targets from. Before v3 this step hardcoded `fastsurfer/<sub>` and returned early when it
+    // was absent, so a session-keyed recon tree yielded no surfaces at all on a remote source.
+    //
+    // The `surf`/`mri`/`stats`/`scripts` placeholders are load-bearing, not decoration:
+    // resolveFsDir prefers a candidate containing surf/, and without them it falls through to its
+    // "first directory that exists" branch and can pick the wrong recon -- which renders the wrong
+    // brain with no error anywhere.
+    const reconNames = (await this.client.list(this.#remoteAbs('fastsurfer')).catch(() => []))
+      .filter((e) => e.type === 'directory' && (e.name === clean || e.name.startsWith(`${clean}_`)))
+      .map((e) => e.name)
+    if (!reconNames.length) {
       this.#savePlaceholders()
       return
     }
-    {
-      const fsEntries = await this.#listRemoteRecursive(fsRel, 3)
+    this.#addPlaceholder('fastsurfer', 'directory')
+    for (const name of reconNames) {
+      this.#addPlaceholder(`fastsurfer/${name}`, 'directory')
+      for (const sub of ['surf', 'mri', 'stats', 'scripts', 'label']) {
+        if (await this.client.exists(this.#remoteAbs(`fastsurfer/${name}/${sub}`))) {
+          this.#addPlaceholder(`fastsurfer/${name}/${sub}`, 'directory')
+        }
+      }
+    }
+
+    // Pass 3 -- ask the DOMAIN which recon trees this target actually needs, and fetch only those.
+    // A longitudinal subject has up to five recons; mirroring all of them would be a serious
+    // regression on a slow link, and at most two are ever needed at once.
+    const subjectDir = this.#mirrorAbs(clean)
+    let needed = []
+    try {
+      const targets = this.manifest.listViewTargets({ outputRoot: this.mirrorRoot, subjectDir })
+      const chosen = targets.find((t) => t.id === targetId) ?? targets.find((t) => t.isDefault) ?? targets[0]
+      needed = [chosen?.fsDir, chosen?.baseDir]
+        .filter(Boolean)
+        .map((abs) => path.relative(this.mirrorRoot, abs).split(path.sep).join('/'))
+    } catch {
+      // No provider support (or an unreadable skeleton): fall back to the subject-keyed recon,
+      // which is what this did before targets existed.
+      needed = [`fastsurfer/${clean}`]
+    }
+    for (const fsRel of [...new Set(needed)]) {
+      if (!(await this.client.exists(this.#remoteAbs(fsRel)))) continue
+      const fsEntries = await this.#listRemoteRecursive(fsRel, 3, RECON_NOISE_DIRS)
       this.#addPlaceholder(fsRel, 'directory')
       for (const e of fsEntries) {
         if (e.type === 'directory') {
           this.#addPlaceholder(e.relativePath, 'directory')
           continue
         }
-        if (SURF_FILES.has(e.name) || isReadableSidecar(e.name, e.size)) {
+        if (needsRealBytes(e.name, e.size)) {
           await this.#materializeFile(e.relativePath, e.size, e.mtimeMs)
         } else {
           this.#addPlaceholder(e.relativePath, 'file', e.size)
@@ -325,13 +379,13 @@ export class SftpDataSource {
     this.#savePlaceholders()
   }
 
-  async buildManifest(subjectId) {
+  async buildManifest(subjectId, { target = null } = {}) {
     const clean = cleanRelative(subjectId)
     if (!(await this.#remoteIsSubject(clean))) throw Object.assign(new Error('Monkey not found'), { statusCode: 404 })
-    await this.#materialize(clean)
+    await this.#materialize(clean, target)
     const subjectDir = this.#mirrorAbs(clean)
     if (!this.manifest.isSubjectDir(subjectDir) || !this.manifest.resolveAnatDir(subjectDir)) throw Object.assign(new Error('Monkey not found'), { statusCode: 404 })
-    return this.manifest.buildManifest({ outputRoot: this.mirrorRoot, subjectDir, fileUrl: (p) => this.fileUrl(p) })
+    return this.manifest.buildManifest({ outputRoot: this.mirrorRoot, subjectDir, fileUrl: (p) => this.fileUrl(p), targetId: target })
   }
 
   // ---- server-side export (over SFTP) ----

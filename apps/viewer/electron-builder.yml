@@ -82,6 +82,26 @@ files:
 electronLanguages:
   - en-US
 
+# Downloadable file names are hyphenated, from `${name}` (the package.json name,
+# `brainana-viewer`) rather than `productName`. They are set per target, NOT at the top level, so
+# the .deb keeps the Debian convention `apt` users expect (brainana-viewer_1.0.0_amd64.deb).
+#
+# `productName` keeps its space -- it is the USER-VISIBLE name (Brainana Viewer.app, the Start
+# menu entry, the .desktop Name) and must not change: Electron derives app.getPath('userData')
+# from it, so renaming it would orphan every existing user's saved remote profiles and recents.
+# A release asset, by contrast, gets curl'd, pasted into install instructions and chmod'd, where
+# a space means percent-encoding in the URL and quoting in every shell command.
+#
+# `${arch}` is explicit on every target, including the Mac x64 build that used to be the plain
+# `.dmg` -- "Apple Silicon takes the -arm64 one, Intel takes the one with no suffix" was a
+# guessing game for anyone who did not read the README. Note it expands per the target's own
+# convention, NOT to one string: x86_64 for AppImage, x64 for nsis and dmg, arm64 for mac arm.
+# Verified by building, not assumed -- the docs quote these names.
+#
+# SAFE TO CHANGE ONLY WHILE AUTO-UPDATE IS OFF. electron-updater resolves downloads by asset
+# name from the generated .yml feed, so renaming after it is wired in is a migration, not an
+# edit. See the `mac.target` note about re-adding `zip`.
+
 linux:
   target: [AppImage, deb]
   category: Science
@@ -89,6 +109,11 @@ linux:
   # name with no email). Using the GitHub no-reply address so no personal inbox is embedded in
   # the publicly distributed .deb.
   maintainer: Brainana <31683843+xingyu-liu@users.noreply.github.com>
+
+appImage:
+  artifactName: ${name}-${version}-${arch}.${ext}
+
+# deb: left alone on purpose -- electron-builder already emits the Debian-policy name.
 
 mac:
   # Both Mac chips (Apple Silicon arm64 + Intel x64) are built in CI, where release.yml passes
@@ -120,6 +145,9 @@ mac:
   # notarize:
   #   teamId: TEAMID
 
+dmg:
+  artifactName: ${name}-${version}-${arch}.${ext}
+
 win:
   target: [nsis]
 
@@ -129,3 +157,4 @@ nsis:
   allowToChangeInstallationDirectory: true
   # perMachine stays false (default) — assisted installer shows
   # "install for me / all users" page before the directory picker
+  artifactName: ${name}-setup-${version}-${arch}.${ext}

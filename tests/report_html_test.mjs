@@ -46,7 +46,10 @@ const data = () => ({
   dataset: {
     sourceId: 'src1', sourceLabel: 'demo_viewer', sourceType: 'local', sourceRoot: '/data/demo_viewer',
     subjectId: 'sub-example', subjectLabel: 'example', session: 'ses-001', relativePath: 'sub-example',
+    scan: { id: 'sub-example_ses-001', stream: 'cross', session: 'ses-001', label: 'ses-001' },
+    synthesisLevel: 'session',
   },
+  longitudinal: null,
   pipelineVersions: ['1.3.0'],
   files: [
     { role: 'base volume', path: 'fastsurfer/sub-example/mri/norm.mgz', url: '/brainana-data/src1/x', brainanaVersion: null, generatedBy: [], header, mesh: null },
@@ -63,6 +66,7 @@ const data = () => ({
     atlas: { name: 'D99', colormap: 'labels', opacity: 0.7, continuous: false, displayRange: null, clip: { lo: null, hi: null }, hiddenRois: 2 },
     morphology: { metric: 'curvature', curvatureStyle: 'binary', colormap: null, range: null, clip: null },
     function: { kind: 'retinotopy', mode: 'Polar angle', threshold: 3.5, opacity: 1, brightness: 1, colormap: 'brainana_polar', displayRange: null, clip: { lo: null, hi: null } },
+    longitudinal: null,
     camera: { azimuth: 90, elevation: 15, scale: 1.4 },
     markerMode: 'nearest vertex',
   },
@@ -355,6 +359,68 @@ ok('esc and fmt handle null, non-finite and markup input')
 assert.equal(formatTimestamp('2026-09-01T14:32:05.000Z'), '2026-09-01 14:32:05 UTC')
 assert.equal(formatTimestamp('not a date'), 'not a date', 'an unparseable stamp is passed through')
 ok('timestamps are rendered in UTC, independent of the reader’s locale')
+
+// --- which reconstruction the report came from ---------------------------------------------
+// A subject can have several, two of them look alike on screen, and a report outlives the viewer
+// that made it -- so a report that does not name its scan cannot be checked against the data later.
+{
+  const longScan = data()
+  longScan.dataset.scan = { id: 'sub-example_ses-002_long', stream: 'long', session: 'ses-002', label: 'ses-002 (long)' }
+  const out = buildReportHtml(longScan)
+  assert.ok(out.includes('ses-002 (long)'), 'the scan label appears')
+  assert.match(out, /base template/i, 'and the stream is explained in prose, not left as an opaque suffix')
+  // Escaped like everything else the report interpolates.
+  const evil = data()
+  evil.dataset.scan = { id: 'x', stream: 'cross', session: null, label: '<img src=x onerror=alert(1)>' }
+  assert.equal(buildReportHtml(evil).includes('<img src=x'), false, 'the scan label is escaped')
+  ok('the report names the reconstruction it came from, and escapes it')
+}
+
+// --- the longitudinal section ------------------------------------------------------------------
+assert.equal(/<h2>Longitudinal change<\/h2>/.test(html), false, 'absent when no change map was shown')
+{
+  const d = data()
+  d.dataset.scan = { id: 'sub-example_base', stream: 'base', session: null, label: 'base template' }
+  d.view.longitudinal = {
+    measure: 'thickness', statistic: 'rate', colormap: 'bwr',
+    displayRange: { min: -0.2, max: 0.2 }, threshold: 0.05, opacity: 1,
+    unit: 'mm per scan', timeSource: 'session label', timeInterpretable: false,
+  }
+  d.longitudinal = {
+    timepoints: ['sub-example_ses-001_long', 'sub-example_ses-002_long'],
+    times: { 'sub-example_ses-001_long': 1, 'sub-example_ses-002_long': 2 },
+    timeSource: 'session label', timeInterpretable: false, skipped: {},
+    roiRates: [{ roi: 'V1', hemi: 'L', measure: 'ThickAvg', slope: -0.0123, mean: 2.5, spc: -0.5, nTimepoints: 2 }],
+    agreement: [{ timepoint: 'sub-example_ses-001', dice: 0.72 }],
+  }
+  const out = buildReportHtml(d)
+  assert.match(out, /<h2>Longitudinal change<\/h2>/)
+  // The caveat must be IN the section, and the unit must travel with the numbers.
+  assert.match(out, /per scan, not per unit time/i, 'the section leads with the caveat')
+  assert.ok(out.includes('mm per scan'), 'the unit is stated')
+  assert.ok(out.includes('V1'), 'the ROI table renders')
+  assert.ok(out.includes('0.72'), 'the base agreement renders')
+  // The report speaks the same vocabulary as the panel that produced it: one word per quantity.
+  // "slope" was the CSV's name for what the UI calls the rate, and shipping both read as two things.
+  assert.match(out, /<th>rate/, 'the rate column is not called "slope"')
+  assert.equal(/<th>slope/.test(out), false, 'no stale "slope" header')
+  assert.match(out, /<th>% change<\/th>/, 'the percent-change column is spelled out, not "spc"')
+  // The table is scoped to ONE FreeSurfer stat, so it has to say which.
+  assert.match(out, /ROI fits\s*<span class="muted">\(ThickAvg\)<\/span>/, 'the ROI table names its stat')
+  // The threshold names the statistic it masks, as the panel's slider does.
+  assert.match(out, /\|rate\| \u2265/, 'the threshold names the statistic')
+  assert.equal(/\|change\| \u2265/.test(out), false, 'the generic "|change|" label is gone')
+  ok('the longitudinal section states the fit, its caveat and its ROI table')
+
+  const good = data()
+  good.dataset.scan = d.dataset.scan
+  good.view.longitudinal = { ...d.view.longitudinal, unit: 'mm per year', timeSource: 'age', timeInterpretable: true }
+  good.longitudinal = { ...d.longitudinal, timeSource: 'age', timeInterpretable: true }
+  const goodOut = buildReportHtml(good)
+  assert.equal(/per scan, not per unit time/i.test(goodOut), false, 'no caveat when the fit used real time')
+  assert.ok(goodOut.includes('mm per year'))
+  ok('a fit against real elapsed time carries no per-scan caveat')
+}
 
 console.log(`\nreport_html_test: ${passed} checks passed`)
 
