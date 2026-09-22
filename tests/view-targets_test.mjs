@@ -15,6 +15,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { listViewTargets, resolveViewTarget } from '../apps/viewer/server/viewTargets.mjs'
 import { buildManifest } from '../apps/viewer/server/manifest.mjs'
+import { surfaceVertexCount } from '../apps/viewer/server/freesurfer.mjs'
 
 let passed = 0
 const ok = (name) => {
@@ -151,12 +152,13 @@ ok('a longitudinal subject offers its cross-sectional AND longitudinal reconstru
 {
   const t = targetsOf('sub-long')
   const byId = Object.fromEntries(t.map((x) => [x.id, x]))
-  // The default is a real scan of the animal, never the unbiased average.
-  assert.equal(t.find((x) => x.isDefault).id, 'sub-long_ses-001')
+  // The base template is the default: it is the only target carrying the change maps, so opening on
+  // a cross-sectional session would hide the change tab on every longitudinal subject.
+  assert.equal(t.find((x) => x.isDefault).id, 'sub-long_base')
   assert.equal(byId['sub-long_base'].stream, 'base')
   assert.equal(byId['sub-long_ses-001_long'].stream, 'long')
   assert.equal(byId['sub-long_ses-001_long'].session, 'ses-001')
-  ok('the default target is the first cross-sectional scan, not the base template')
+  ok('the default target is the base template, which is where the change maps live')
 
   // The pairing table: base/long take the SUBJECT-level anat; cross takes its own session's.
   assert.equal(rel(byId['sub-long_ses-001'].atlasAnatDir), 'sub-long/ses-001/anat')
@@ -174,13 +176,13 @@ ok('a longitudinal subject offers its cross-sectional AND longitudinal reconstru
 // --- id resolution --------------------------------------------------------------------------
 {
   const sd = path.join(root, 'sub-long')
-  assert.equal(resolveViewTarget({ outputRoot: root, subjectDir: sd, targetId: null }).target.id, 'sub-long_ses-001')
+  assert.equal(resolveViewTarget({ outputRoot: root, subjectDir: sd, targetId: null }).target.id, 'sub-long_base')
   assert.equal(resolveViewTarget({ outputRoot: root, subjectDir: sd, targetId: 'sub-long_base' }).target.id, 'sub-long_base')
   // An id that names no reconstruction resolves to NOTHING rather than quietly falling back to the
   // default -- showing a different scan than the one asked for is worse than an error.
   for (const bogus of ['sub-long_ses-009', 'sub-long_base_evil', '../../etc/passwd', '']) {
     const r = resolveViewTarget({ outputRoot: root, subjectDir: sd, targetId: bogus })
-    if (bogus === '') assert.equal(r.target.id, 'sub-long_ses-001', 'empty id means "the default"')
+    if (bogus === '') assert.equal(r.target.id, 'sub-long_base', 'empty id means "the default"')
     else assert.equal(r.target, null, `unknown id '${bogus}' resolves to null`)
   }
   ok('an unknown scan id resolves to null; it never falls back to a different scan')
@@ -230,6 +232,55 @@ ok('a longitudinal subject offers its cross-sectional AND longitudinal reconstru
   assert.equal(m.atlases[0].surface, null, 'the mismatched overlay is withheld')
   assert.ok(m.warnings.some((w) => /vertex count/i.test(w)), 'and the manifest says why')
   ok('a surface overlay whose vertex count disagrees with the mesh is withheld, with a warning')
+}
+
+// --- an unknown scan id is a 404, not a different scan ------------------------------------------
+{
+  // The pure-function layer is covered above (resolveViewTarget returns null). This pins the
+  // behaviour the data contract actually promises to a client: buildManifest THROWS, carrying a
+  // 404, rather than quietly resolving to the subject's default and rendering another brain.
+  const subjectDir = path.join(root, 'sub-long')
+  // An EMPTY `?scan=` is deliberately not in this list: it is falsy, so it means "not specified"
+  // and resolves to the default, exactly as omitting the parameter does.
+  for (const bogus of ['sub-long_ses-999', '../../etc/passwd', 'sub-other_base', 'sub-long_base_long']) {
+    assert.throws(
+      () => buildManifest({ outputRoot: root, subjectDir, fileUrl: (p) => rel(p), targetId: bogus }),
+      (err) => err.statusCode === 404 && /Unknown scan|no viewable reconstruction/.test(err.message),
+      `targetId ${JSON.stringify(bogus)} must 404`,
+    )
+  }
+  ok('an id naming no reconstruction of the subject is a 404, never a fallback to another scan')
+
+  // ...and the id is reflected back so the client can say which scan was refused. It is echoed
+  // into a JSON body, never interpolated into a path.
+  const err = (() => {
+    try {
+      buildManifest({ outputRoot: root, subjectDir, fileUrl: (p) => rel(p), targetId: 'sub-long_ses-999' })
+    } catch (e) {
+      return e
+    }
+  })()
+  assert.match(err.message, /sub-long_ses-999/)
+  ok('the 404 names the scan that was asked for')
+}
+
+// --- a zero-filled morphometry header is "unknown", not "zero vertices" -------------------------
+{
+  // An SFTP mirror writes a failed transfer as a sized but zero-filled placeholder. Parsed
+  // literally that is a well-formed vertex count of 0, which mismatches every real overlay and
+  // made them all vanish behind a "vertex count does not match" warning.
+  const surf = path.join(root, 'fastsurfer', 'sub-long_ses-002', 'surf')
+  const saved = await fsp.readFile(path.join(surf, 'lh.thickness'))
+  await fsp.writeFile(path.join(surf, 'lh.thickness'), Buffer.alloc(64))
+  assert.equal(surfaceVertexCount(surf, 'lh'), 6, 'falls through the zeroed file to a readable one')
+
+  for (const name of ['lh.curv', 'lh.sulc', 'lh.white']) {
+    await fsp.rm(path.join(surf, name), { force: true })
+  }
+  assert.equal(surfaceVertexCount(surf, 'lh'), null, 'with nothing readable the count is unknown, not 0')
+
+  await fsp.writeFile(path.join(surf, 'lh.thickness'), saved)
+  ok('a zero-filled morphometry header reads as unknown rather than a mesh with no vertices')
 }
 
 await fsp.rm(root, { recursive: true, force: true })
