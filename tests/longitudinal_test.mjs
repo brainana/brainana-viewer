@@ -9,6 +9,8 @@ import {
   isTimeInterpretable, timeUnit, rateUnitLabel, timeSourceCaveat, timeSourceSummary,
   skippedSummary, exactlyDeterminedNote, symmetricRobustRange, robustRange,
   parseRoiRatesCsv, parseSegmentationAgreement, worstAgreement, MEASURE_TO_STATS, selectRoiRows,
+  PRIMARY_STAT, statBelongsTo, statisticShortLabel, thresholdLabel,
+  datasetHasLongChangeMaps, changeMapsEmptyMessage,
 } from '../apps/viewer/src/data/longitudinal.ts'
 import { maskSurfaceBinsByMagnitude, quantizeScalarToBins } from '../apps/viewer/src/data/functional.ts'
 
@@ -86,6 +88,44 @@ ok('the denominator follows the time source, defaulting to per-scan')
   assert.match(exactlyDeterminedNote(info('age')), /no residual/i, 'two timepoints is an exact fit')
   assert.equal(exactlyDeterminedNote(info('age', { timepoints: ['a', 'b', 'c'] })), null)
   ok('skipped timepoints and an exactly-determined fit are both surfaced')
+}
+
+// --- empty change-map copy -----------------------------------------------------------------------
+{
+  const baseScan = { id: 'sub-a_base', subjectId: 'sub-a', session: null, stream: 'base', label: 'base template', isDefault: false }
+  const longScan = { id: 'sub-a_ses-001_long', subjectId: 'sub-a', session: 'ses-001', stream: 'long', label: 'ses-001 (long)', isDefault: false }
+  const crossScan = { id: 'sub-a_ses-001', subjectId: 'sub-a', session: 'ses-001', stream: 'cross', label: 'ses-001', isDefault: true }
+  const roster = { scans: [crossScan, baseScan, longScan] }
+  assert.equal(datasetHasLongChangeMaps(roster), true)
+  assert.equal(datasetHasLongChangeMaps({ scans: [crossScan] }), false)
+  assert.equal(datasetHasLongChangeMaps(null), false)
+  assert.match(changeMapsEmptyMessage({ ...roster, scan: longScan }), /base template/)
+  assert.doesNotMatch(changeMapsEmptyMessage({ ...roster, scan: longScan }), /Reprocess/)
+  assert.match(changeMapsEmptyMessage({ ...roster, scan: crossScan }), /base template/)
+  const crossScan2 = { id: 'sub-a_ses-002', subjectId: 'sub-a', session: 'ses-002', stream: 'cross', label: 'ses-002', isDefault: false }
+  assert.match(changeMapsEmptyMessage({ scans: [crossScan], scan: crossScan }), /multiple sessions/)
+  assert.doesNotMatch(changeMapsEmptyMessage({ scans: [crossScan], scan: crossScan }), /Reprocess/)
+  assert.match(changeMapsEmptyMessage({ scans: [crossScan, crossScan2], scan: crossScan }), /With multiple sessions/)
+  assert.match(changeMapsEmptyMessage({ scans: [crossScan, crossScan2], scan: crossScan }), /session_longitudinal/)
+  assert.match(changeMapsEmptyMessage(null), /multiple sessions/)
+  ok('empty-state copy points to base template or reprocess + multiple sessions')
+}
+
+// --- the threshold's label names what it thresholds ------------------------------------------------
+{
+  assert.equal(statisticShortLabel('rate'), 'rate')
+  assert.equal(statisticShortLabel('avg'), 'mean')
+  assert.equal(statisticShortLabel('spc'), '% change')
+  const realTime = { timeSource: 'age' }
+  const scanOrder = { timeSource: null }
+  // The slider masks |value| >= x on the SELECTED map, so a fixed "|change| ≥" lied for the
+  // temporal mean: that is not a change, and thresholding it hides thin cortex, not small change.
+  assert.equal(thresholdLabel(realTime, { measure: 'thickness', statistic: 'rate' }), '|rate| ≥')
+  assert.equal(thresholdLabel(realTime, { measure: 'thickness', statistic: 'avg' }), '|mean| ≥')
+  assert.equal(thresholdLabel(realTime, { measure: 'thickness', statistic: 'spc' }), '|% change| ≥')
+  assert.equal(thresholdLabel(scanOrder, { measure: 'thickness', statistic: 'rate' }), '|rate| ≥')
+  assert.equal(thresholdLabel(realTime, { measure: 'curv', statistic: 'avg' }), '|mean| ≥')
+  ok('the magnitude threshold is labelled with the statistic it is thresholding')
 }
 
 // --- display windows -----------------------------------------------------------------------------
@@ -166,7 +206,9 @@ ok('the denominator follows the time source, defaulting to per-scan')
     row('V1', 'ThickAvg', 0.1, 'L'),
     row('MT', 'ThickAvg', -0.5, 'L'),
     row('V1', 'ThickAvg', 0.3, 'R'),
+    row('V1', 'ThickStd', 8.8, 'L'),
     row('V1', 'SurfArea', 9.9, 'L'),
+    row('V1', 'GrayVol', 700, 'L'),
     row('V1', 'NumVert', 500, 'L'),
   ]
   // The CSV carries FreeSurfer's stat names, so selecting "thickness" is a lookup, not an equality
@@ -174,6 +216,24 @@ ok('the denominator follows the time source, defaulting to per-scan')
   assert.deepEqual(selectRoiRows(all, { measure: 'thickness' }).map((r) => `${r.roi}${r.hemi}`), ['MTL', 'V1R', 'V1L'])
   assert.deepEqual(selectRoiRows(all, { measure: 'area' }).map((r) => r.measure), ['SurfArea'])
   assert.equal(selectRoiRows(all, { measure: 'curv' }).length, 0)
+  // ONE stat at a time. A measure maps to two to four FreeSurfer stats, and listing them together
+  // put each ROI on screen two to four times with no column naming them -- and mixed SurfArea (mm²)
+  // with GrayVol (mm³) inside one magnitude sort, where the bigger raw numbers always won.
+  assert.deepEqual(selectRoiRows(all, { measure: 'thickness' }).map((r) => r.measure), ['ThickAvg', 'ThickAvg', 'ThickAvg'])
+  assert.equal(selectRoiRows(all, { measure: 'thickness' }).some((r) => r.measure === 'ThickStd'), false)
+  assert.deepEqual(selectRoiRows(all, { measure: 'area' }).map((r) => r.slope), [9.9], 'GrayVol does not outrank SurfArea')
+  // The default is the stat whose vertex map is on the surface, so table and mesh agree.
+  assert.equal(PRIMARY_STAT.thickness, 'ThickAvg')
+  assert.equal(PRIMARY_STAT.area, 'SurfArea')
+  assert.equal(PRIMARY_STAT.curv, 'MeanCurv')
+  // ...and the others stay reachable through the stat picker.
+  assert.deepEqual(selectRoiRows(all, { measure: 'thickness', stat: 'ThickStd' }).map((r) => r.slope), [8.8])
+  assert.deepEqual(selectRoiRows(all, { measure: 'area', stat: 'GrayVol' }).map((r) => r.slope), [700])
+  // A stat that does not belong to the measure falls back to the primary rather than emptying the
+  // table -- a stale picker value on a measure switch must not look like "no fits".
+  assert.deepEqual(selectRoiRows(all, { measure: 'thickness', stat: 'SurfArea' }).map((r) => r.measure), ['ThickAvg', 'ThickAvg', 'ThickAvg'])
+  assert.equal(statBelongsTo('thickness', 'ThickStd'), true)
+  assert.equal(statBelongsTo('thickness', 'SurfArea'), false)
   // Largest absolute change first: sign is already a column, so ordering by magnitude answers
   // "where did the most happen" rather than "what increased".
   assert.deepEqual(selectRoiRows(all, { measure: 'thickness' }).map((r) => r.slope), [-0.5, 0.3, 0.1])

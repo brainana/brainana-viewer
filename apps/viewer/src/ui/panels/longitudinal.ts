@@ -9,17 +9,16 @@ import type { LongitudinalInfo, Manifest } from '../../types.ts'
 import {
   LONG_MEASURES,
   LONG_STATISTICS,
-  type AgreementRow,
   type Measure,
   type Statistic,
-  AGREEMENT_WARN_DICE,
+  changeMapsEmptyMessage,
   exactlyDeterminedNote,
   isTimeInterpretable,
   rateUnitLabel,
   skippedSummary,
+  thresholdLabel,
   timeSourceCaveat,
   timeSourceSummary,
-  worstAgreement,
 } from '../../data/longitudinal.ts'
 import { h, selectField, type SelectOption } from '@brainana/ui/dom.ts'
 import { createSlider, type Slider } from '@brainana/ui/components/slider.ts'
@@ -44,7 +43,6 @@ export interface LongitudinalPanel {
   element: HTMLElement
   setActive: (key: string | null) => void
   setThresholdBounds: (max: number, value: number) => void
-  setAgreement: (rows: AgreementRow[]) => void
   getChoice: (key: string) => ChangeChoice | null
   /** The unit the currently selected map's values are in, for the readout and the colour dock. */
   unitFor: (key: string) => string
@@ -64,24 +62,43 @@ export function createLongitudinalPanel(
   const measures = LONG_MEASURES.filter((m) => maps.some((x) => x.measure === m.id))
   const statistics = LONG_STATISTICS.filter((s) => maps.some((x) => x.statistic === s.id))
 
-  let measure: Measure = measures[0]?.id ?? 'thickness'
+  // Opens on NO overlay, like the funcmap and atlas panels: the pickers used to READ
+  // "thickness / rate of change" on mount while nothing had actually been selected (emit() is only
+  // called from the change handlers), so the panel described a map the surface was not showing and
+  // the user had to wiggle a dropdown to make the two agree. `none` makes the mount state honest.
+  const NONE = 'none'
+  let measure: Measure | typeof NONE = NONE
   let statistic: Statistic = statistics[0]?.id ?? 'rate'
-  const current = (): ChangeChoice => ({ measure, statistic })
-  const emit = (): void => cb.onSelect(byKey.has(changeKey(current())) ? current() : null)
+  const chosen = (): ChangeChoice | null => (measure === NONE ? null : { measure, statistic })
+  const emit = (): void => {
+    const choice = chosen()
+    cb.onSelect(choice && byKey.has(changeKey(choice)) ? choice : null)
+  }
 
-  const measureOptions: SelectOption[] = measures.map((m) => ({ value: m.id, label: m.label }))
+  // `none` first, so the browser's own "first option is selected" rule makes it the mount state.
+  const measureOptions: SelectOption[] = [
+    { value: NONE, label: 'none' },
+    ...measures.map((m) => ({ value: m.id, label: m.label })),
+  ]
   // Each statistic carries the unit its values are in, so the denominator is chosen WITH the
   // statistic rather than discovered afterwards.
-  const statisticOptions = (): SelectOption[] =>
-    statistics.map((s) => ({ value: s.id, label: `${s.label} (${rateUnitLabel(info, { measure, statistic: s.id }) || 'unitless'})` }))
+  const statisticOptions = (): SelectOption[] => {
+    const forUnits = measure === NONE ? (measures[0]?.id ?? 'thickness') : measure
+    return statistics.map((s) => ({
+      value: s.id,
+      label: `${s.label} (${rateUnitLabel(info, { measure: forUnits, statistic: s.id }) || 'unitless'})`,
+    }))
+  }
 
   const measurePicker = selectField('measure', measureOptions, (value) => {
-    measure = value as Measure
+    measure = value === NONE ? NONE : (value as Measure)
     refreshStatisticOptions()
+    syncEnabled()
     emit()
   })
   const statisticPicker = selectField('statistic', statisticOptions(), (value) => {
     statistic = value as Statistic
+    syncThresholdLabel()
     emit()
   })
   // selectField has no setOptions, and these labels genuinely have to be rebuilt: each carries the
@@ -94,10 +111,30 @@ export function createLongitudinalPanel(
     statisticPicker.setValue(statistic)
   }
 
+  // Nothing is on screen while the measure is `none`, so the controls that shape that overlay are
+  // inert -- disable them rather than leaving live-looking widgets that do nothing. Opacity is left
+  // alone: it is the panel's own persistent preference, not a property of the current map.
+  function syncEnabled(): void {
+    const off = measure === NONE
+    statisticPicker.select.disabled = off
+    if (off) thresh.setDisabled(true)
+    syncThresholdLabel()
+  }
+
+  // The threshold's meaning changes with the statistic, so its label has to as well.
+  function syncThresholdLabel(): void {
+    const forUnits = measure === NONE ? (measures[0]?.id ?? 'thickness') : measure
+    thresh.setLabel(thresholdLabel(info, { measure: forUnits, statistic }))
+  }
+
   // |value| >= threshold. A magnitude threshold rather than a window: a signed map needs its
   // near-zero middle hidden and both tails kept. 0 shows everything.
+  //
+  // The label NAMES the statistic it is thresholding (see thresholdLabel). It used to read
+  // "|change| ≥" whatever was selected, which was simply wrong for the temporal mean -- that is not
+  // a change, and thresholding it by magnitude hides thin cortex rather than small change.
   const thresh: Slider = createSlider({
-    label: '|change| ≥',
+    label: '|rate| ≥',
     min: 0,
     max: 1,
     step: 0.01,
@@ -108,38 +145,41 @@ export function createLongitudinalPanel(
   const opacity = createSlider({ label: 'opacity', min: 0, max: 1, step: 0.05, value: initial.opacity ?? 1, onInput: (v) => cb.onOpacity(v) })
 
   // --- the time-source block ------------------------------------------------------------------
-  // Pinned above the pickers. The good case fills the same slot as the warning, so the absence of
-  // a banner is never ambiguous about whether the question was asked.
+  // Sits BELOW the pickers: it is context you read once, not a control, and at the top it pushed
+  // measure/statistic/threshold/opacity below the fold of the (scrollable) side picker. The good
+  // case fills the same slot as the warning, so the absence of a banner is never ambiguous about
+  // whether the question was asked.
   const caveat = timeSourceCaveat(info)
-  const timeBlock = h('div', { class: caveat ? 'panel-note warn' : 'panel-note muted' }, [
-    caveat
-      ? h('p', {}, [h('strong', {}, ['Rates are per scan, not per unit time. ']), caveat.replace(/^Rates are per scan, not per unit time\. /, '')])
-      : h('p', {}, [timeSourceSummary(info)]),
+  // Headline always visible, the reasoning behind a caret. The banner still cannot be dismissed —
+  // but the sentence that actually matters is one line, and the map controls above it should not be
+  // pushed down by five lines most people read once. A scroll box was worse: a scrollbar inside the
+  // side picker's own scrollbar, and the text still ate the height.
+  const headline = caveat
+    ? h('strong', {}, ['Rates are per scan, not per unit time.'])
+    : h('span', {}, [timeSourceSummary(info)])
+  const detail = [
+    ...(caveat ? [h('p', {}, [caveat.replace(/^Rates are per scan, not per unit time\. /, '')])] : []),
     ...(skippedSummary(info) ? [h('p', {}, [skippedSummary(info) as string])] : []),
     ...(exactlyDeterminedNote(info) ? [h('p', {}, [exactlyDeterminedNote(info) as string])] : []),
-  ])
+  ]
+  const noteClass = caveat ? 'panel-note warn' : 'panel-note muted'
+  // No detail to reveal -> a plain note, not a caret: a disclosure control that opens onto nothing
+  // reads as broken.
+  const timeBlock = detail.length
+    ? h('details', { class: noteClass }, [h('summary', {}, [headline]), ...detail])
+    : h('div', { class: noteClass }, [h('p', {}, [headline])])
 
-  // --- base segmentation agreement ---------------------------------------------------------------
-  const agreementSummary = h('span', { class: 'agreement-value' }, ['—'])
-  const agreementRows = h('div', { class: 'agreement-rows' })
-  const agreementNote = h('p', { class: 'agreement-note', hidden: true }, [
-    'Low agreement between the base segmentation and this timepoint. The base’s surfaces deserve a closer look before you trust the change maps.',
-  ])
-  const agreement = h('details', { class: 'panel-group agreement', hidden: true }, [
-    h('summary', {}, ['base agreement ', agreementSummary]),
-    agreementNote,
-    agreementRows,
-  ])
+  // Mount state: `none`, with the map-shaping controls disabled to match.
+  syncEnabled()
 
-  const empty = h('p', { class: 'muted' }, [
-    'No longitudinal change maps in this dataset. Reprocess with brainana 3.0 or newer at anat.synthesis_level "session_longitudinal" to generate them.',
-  ])
+  const emptyHint = h('p', { class: 'muted' }, [changeMapsEmptyMessage(manifest)])
+  const emptyBody = info ? [emptyHint, timeBlock] : [emptyHint]
 
   const element = h('div', { class: 'side-panel', hidden: true }, [
     h('div', { class: 'side-panel-head' }, ['change']),
     ...(maps.length
-      ? [timeBlock, measurePicker.element, statisticPicker.element, thresh.element, opacity.element, agreement]
-      : [empty]),
+      ? [measurePicker.element, statisticPicker.element, thresh.element, opacity.element, timeBlock]
+      : emptyBody),
   ])
 
   return {
@@ -154,14 +194,23 @@ export function createLongitudinalPanel(
     },
     setActive: (key) => {
       const map = key ? byKey.get(key) : null
-      if (!map) return
+      if (!map) {
+        // A cleared overlay (tab entry, scan switch, an unknown key) puts the picker back to `none`
+        // instead of leaving it naming a map that is no longer painted.
+        measure = NONE
+        measurePicker.setValue(NONE)
+        refreshStatisticOptions()
+        syncEnabled()
+        return
+      }
       measure = map.measure as Measure
       statistic = map.statistic as Statistic
       measurePicker.setValue(measure)
       refreshStatisticOptions()
+      syncEnabled()
     },
     setThresholdBounds: (max, value) => {
-      if (!(max > 0)) {
+      if (!(max > 0) || measure === NONE) {
         thresh.setValue(0)
         thresh.setDisabled(true)
         return
@@ -169,23 +218,6 @@ export function createLongitudinalPanel(
       thresh.setBounds(0, max, max / 100)
       thresh.setValue(value)
       thresh.setDisabled(false)
-    },
-    setAgreement: (rows) => {
-      const worst = worstAgreement(rows)
-      if (!worst) {
-        agreement.hidden = true
-        return
-      }
-      agreement.hidden = false
-      agreementSummary.textContent = `lowest Dice ${worst.dice.toFixed(2)} · ${worst.timepoint}`
-      agreementSummary.classList.toggle('warn', worst.dice < AGREEMENT_WARN_DICE)
-      agreementNote.hidden = worst.dice >= AGREEMENT_WARN_DICE
-      agreementRows.innerHTML = ''
-      for (const row of rows) {
-        agreementRows.append(
-          h('div', { class: 'agreement-row' }, [h('span', {}, [row.timepoint]), h('span', { class: 'num' }, [row.dice.toFixed(3)])]),
-        )
-      }
     },
   }
 }

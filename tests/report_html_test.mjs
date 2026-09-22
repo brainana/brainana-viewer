@@ -400,6 +400,16 @@ assert.equal(/<h2>Longitudinal change<\/h2>/.test(html), false, 'absent when no 
   assert.ok(out.includes('mm per scan'), 'the unit is stated')
   assert.ok(out.includes('V1'), 'the ROI table renders')
   assert.ok(out.includes('0.72'), 'the base agreement renders')
+  // The report speaks the same vocabulary as the panel that produced it: one word per quantity.
+  // "slope" was the CSV's name for what the UI calls the rate, and shipping both read as two things.
+  assert.match(out, /<th>rate/, 'the rate column is not called "slope"')
+  assert.equal(/<th>slope/.test(out), false, 'no stale "slope" header')
+  assert.match(out, /<th>% change<\/th>/, 'the percent-change column is spelled out, not "spc"')
+  // The table is scoped to ONE FreeSurfer stat, so it has to say which.
+  assert.match(out, /ROI fits\s*<span class="muted">\(ThickAvg\)<\/span>/, 'the ROI table names its stat')
+  // The threshold names the statistic it masks, as the panel's slider does.
+  assert.match(out, /\|rate\| \u2265/, 'the threshold names the statistic')
+  assert.equal(/\|change\| \u2265/.test(out), false, 'the generic "|change|" label is gone')
   ok('the longitudinal section states the fit, its caveat and its ROI table')
 
   const good = data()

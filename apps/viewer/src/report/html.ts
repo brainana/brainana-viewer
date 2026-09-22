@@ -7,6 +7,8 @@
 import type { AtlasReadout, FileInfo, HeaderInfo, LocationReadout, PaneShots, ReportData, ViewState } from './model.ts'
 import { bookmarkName } from './bookmarks.ts'
 import { formatResolution } from './header.ts'
+import { colormapDisplayName } from '../data/colormap.ts'
+import { statisticShortLabel, type Statistic } from '../data/longitudinal.ts'
 
 const EM_DASH = '—'
 
@@ -137,7 +139,7 @@ function viewSection(view: ViewState): string {
   if (view.atlas) {
     rows.push([
       'atlas overlay',
-      `${esc(view.atlas.name)} <span class="muted">(${view.atlas.continuous ? 'continuous' : 'parcellation'}, colormap ${esc(view.atlas.colormap)}, opacity ${fmt(view.atlas.opacity, 2)}${view.atlas.hiddenRois ? `, ${view.atlas.hiddenRois} ROI(s) hidden` : ''})</span>`,
+      `${esc(view.atlas.name)} <span class="muted">(${view.atlas.continuous ? 'continuous' : 'parcellation'}, colormap ${esc(colormapDisplayName(view.atlas.colormap))}, opacity ${fmt(view.atlas.opacity, 2)}${view.atlas.hiddenRois ? `, ${view.atlas.hiddenRois} ROI(s) hidden` : ''})</span>`,
     ])
     if (view.atlas.displayRange) rows.push(['atlas display range', `${fmt(view.atlas.displayRange.min, 3)} … ${fmt(view.atlas.displayRange.max, 3)}`])
     rows.push(['atlas clip', clipText(view.atlas.clip)])
@@ -148,13 +150,13 @@ function viewSection(view: ViewState): string {
     'morphology shading',
     view.morphology.metric === 'none'
       ? '<span class="muted">none</span>'
-      : `${esc(view.morphology.metric)}${view.morphology.metric === 'curvature' ? ` · ${esc(view.morphology.curvatureStyle)}` : ''}${view.morphology.colormap ? ` <span class="muted">(colormap ${esc(view.morphology.colormap)})</span>` : ''}`,
+      : `${esc(view.morphology.metric)}${view.morphology.metric === 'curvature' ? ` · ${esc(view.morphology.curvatureStyle)}` : ''}${view.morphology.colormap ? ` <span class="muted">(colormap ${esc(colormapDisplayName(view.morphology.colormap))})</span>` : ''}`,
   ])
   if (view.morphology.range) rows.push(['morphology range', `${fmt(view.morphology.range.min, 3)} … ${fmt(view.morphology.range.max, 3)}`])
   if (view.function) {
     rows.push([
       'function overlay',
-      `${esc(view.function.kind)} · ${esc(view.function.mode)} <span class="muted">(colormap ${esc(view.function.colormap)}, opacity ${fmt(view.function.opacity, 2)}, brightness ${fmt(view.function.brightness, 2)})</span>`,
+      `${esc(view.function.kind)} · ${esc(view.function.mode)} <span class="muted">(colormap ${esc(colormapDisplayName(view.function.colormap))}, opacity ${fmt(view.function.opacity, 2)}, brightness ${fmt(view.function.brightness, 2)})</span>`,
     ])
     rows.push(['F-stat threshold', fmt(view.function.threshold, 2)])
     if (view.function.displayRange) rows.push(['function display range', `${fmt(view.function.displayRange.min, 3)} … ${fmt(view.function.displayRange.max, 3)}`])
@@ -526,13 +528,26 @@ function longitudinalSection(data: ReportData): string {
   const summary = dl([
     ['map', `${esc(view.measure)} ${esc(view.statistic)}`],
     ['units', view.unit ? esc(view.unit) : '<span class="muted">unitless</span>'],
+    // Named for the same reason the other three overlays name theirs, and more urgently: this is
+    // the one map whose colour carries a SIGN, so without the colormap a reader cannot tell
+    // red-is-increase from red-is-decrease -- and the reverse toggle makes either possible.
+    ['colormap', view.colormap ? esc(colormapDisplayName(view.colormap)) : '<span class="muted">not recorded</span>'],
+    ['display range', view.displayRange ? `${fmt(view.displayRange.min, 3)} … ${fmt(view.displayRange.max, 3)}` : '<span class="muted">not recorded</span>'],
     ['time source', text(view.timeSource)],
     ['timepoints', String(fit.timepoints.length)],
-    ['threshold', view.threshold > 0 ? `|change| \u2265 ${esc(view.threshold.toPrecision(3))}` : '<span class="muted">none</span>'],
+    [
+      'threshold',
+      view.threshold > 0
+        ? `|${esc(statisticShortLabel(view.statistic as Statistic))}| \u2265 ${esc(view.threshold.toPrecision(3))}`
+        : '<span class="muted">none</span>',
+    ],
   ])
+  // The table is scoped to ONE FreeSurfer stat (see PRIMARY_STAT), so name it once in the heading
+  // rather than on every row -- without it a reader cannot tell ThickAvg from ThickStd.
+  const roiStat = fit.roiRates[0]?.measure ?? ''
   const roi = fit.roiRates.length
-    ? `<h3>ROI fits</h3>
-<table class="roi-rates"><thead><tr><th>roi</th><th>hemi</th><th>slope${view.unit ? ` (${esc(view.unit)})` : ''}</th><th>mean</th><th>spc</th><th>n</th></tr></thead><tbody>${fit.roiRates
+    ? `<h3>ROI fits${roiStat ? ` <span class="muted">(${esc(roiStat)})</span>` : ''}</h3>
+<table class="roi-rates"><thead><tr><th>roi</th><th>hemi</th><th>rate${view.unit ? ` (${esc(view.unit)})` : ''}</th><th>mean</th><th>% change</th><th>n</th></tr></thead><tbody>${fit.roiRates
         .map(
           (r) =>
             `<tr><td>${esc(r.roi)}</td><td>${esc(r.hemi)}</td><td class="num">${esc(fmt(r.slope, 4))}</td><td class="num">${esc(

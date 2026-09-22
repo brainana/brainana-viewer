@@ -9,7 +9,27 @@
 //
 // brainana's own docs put it plainly: "a rate is not interpretable without it". So every function
 // here that produces a number for display also produces the unit that number is in.
-import type { ChangeMap, LongitudinalInfo } from '../types'
+import type { ChangeMap, LongitudinalInfo, Manifest } from '../types'
+
+/** This subject was processed with a base template that carries vertex change maps. */
+export function datasetHasLongChangeMaps(manifest: Pick<Manifest, 'scans'> | null): boolean {
+  return manifest?.scans?.some((s) => s.stream === 'base') ?? false
+}
+
+/** Copy when the change panel has no maps to overlay on the active scan. */
+export function changeMapsEmptyMessage(manifest: Manifest | null): string {
+  if (manifest && datasetHasLongChangeMaps(manifest) && manifest.scan?.stream !== 'base') {
+    return 'Change maps are on base template, select it in ses.'
+  }
+  const crossSessions = manifest?.scans?.filter((s) => s.stream === 'cross').length ?? 0
+  if (crossSessions > 1) {
+    return (
+      'With multiple sessions but no change maps, reprocess using brainana 3.0 or newer ' +
+      'at anat.synthesis_level "session_longitudinal".'
+    )
+  }
+  return 'No longitudinal change maps in this dataset. They need multiple sessions per subject.'
+}
 
 export const LONG_MEASURES = [
   { id: 'thickness', label: 'thickness', unit: 'mm' },
@@ -17,10 +37,14 @@ export const LONG_MEASURES = [
   { id: 'curv', label: 'curvature', unit: '' },
 ] as const
 
+// `label` names the statistic in the picker; `short` is the same quantity as a bare noun, for the
+// threshold slider and the ROI table's column head. They are deliberately the SAME WORD in both
+// places -- the panel used to say "rate of change" while the table's column said "slope" and the
+// threshold said "change", which read as three quantities where there is one.
 export const LONG_STATISTICS = [
-  { id: 'rate', label: 'rate of change', diverging: true },
-  { id: 'avg', label: 'temporal mean', diverging: false },
-  { id: 'spc', label: 'percent change', diverging: true },
+  { id: 'rate', label: 'rate of change', short: 'rate', diverging: true },
+  { id: 'avg', label: 'temporal mean', short: 'mean', diverging: false },
+  { id: 'spc', label: 'percent change', short: '% change', diverging: true },
 ] as const
 
 export type Measure = (typeof LONG_MEASURES)[number]['id']
@@ -70,6 +94,25 @@ export function rateUnitLabel(info: Pick<LongitudinalInfo, 'timeSource'> | null,
   const per = timeUnit(info)
   if (map.statistic === 'spc') return `% per ${per}`
   return base ? `${base} per ${per}` : `per ${per}`
+}
+
+/** The statistic's bare noun — 'rate', 'mean', '% change'. */
+export function statisticShortLabel(statistic: Statistic): string {
+  return LONG_STATISTICS.find((s) => s.id === statistic)?.short ?? String(statistic)
+}
+
+/**
+ * The magnitude threshold's label, which has to NAME what it is thresholding.
+ *
+ * It masks `|value| >= x` on whichever map is selected, so a fixed "|change| ≥" was wrong for the
+ * temporal mean: that statistic is not a change at all, and thresholding it hides thin cortex
+ * rather than small change. Units live in the statistic picker and time-source note, not here.
+ */
+export function thresholdLabel(
+  _info: Pick<LongitudinalInfo, 'timeSource'> | null,
+  map: Pick<ChangeMap, 'measure' | 'statistic'>,
+): string {
+  return `|${statisticShortLabel(map.statistic as Statistic)}| ≥`
 }
 
 /**
@@ -211,6 +254,26 @@ export const MEASURE_TO_STATS: Record<Measure, string[]> = {
   curv: ['MeanCurv', 'GausCurv', 'CurvInd', 'FoldInd'],
 }
 
+/**
+ * The ONE stat per measure that is the ROI-level counterpart of the vertex map on screen.
+ *
+ * The table used to list every stat in `MEASURE_TO_STATS` at once with no column naming them, so
+ * each ROI appeared two to four times with different numbers and no way to tell which was which —
+ * and "area" silently mixed SurfArea (mm²) with GrayVol (mm³) in one magnitude sort. Showing the
+ * primary stat by default makes one row per ROI, and makes the table agree with the surface: the
+ * thickness map IS ThickAvg's vertex-level analogue. The others stay reachable from the stat picker.
+ */
+export const PRIMARY_STAT: Record<Measure, string> = {
+  thickness: 'ThickAvg',
+  area: 'SurfArea',
+  curv: 'MeanCurv',
+}
+
+/** Is this stat one of the ones `measure` offers? */
+export function statBelongsTo(measure: Measure, stat: string): boolean {
+  return (MEASURE_TO_STATS[measure] ?? []).includes(stat)
+}
+
 export interface RoiRateTableRow extends RoiRateRow {
   hemi: 'L' | 'R'
 }
@@ -224,10 +287,18 @@ export interface RoiRateTableRow extends RoiRateRow {
  */
 export function selectRoiRows(
   rows: RoiRateTableRow[],
-  { measure, hemi = 'both', sort = 'slope' }: { measure: Measure; hemi?: 'both' | 'L' | 'R'; sort?: 'slope' | 'roi' },
+  {
+    measure,
+    stat,
+    hemi = 'both',
+    sort = 'slope',
+  }: { measure: Measure; stat?: string; hemi?: 'both' | 'L' | 'R'; sort?: 'slope' | 'roi' },
 ): RoiRateTableRow[] {
-  const stats = MEASURE_TO_STATS[measure] ?? []
-  const filtered = rows.filter((r) => stats.includes(r.measure) && (hemi === 'both' || r.hemi === hemi))
+  // One stat at a time. Ordering by |slope| across stats was apples-to-oranges -- CurvInd slopes
+  // run hundreds of times larger than MeanCurv ones, so "largest change first" really ranked by
+  // whichever stat had the bigger raw numbers.
+  const wanted = stat && statBelongsTo(measure, stat) ? stat : PRIMARY_STAT[measure]
+  const filtered = rows.filter((r) => r.measure === wanted && (hemi === 'both' || r.hemi === hemi))
   return filtered.sort((a, b) =>
     sort === 'roi'
       ? a.roi.localeCompare(b.roi, undefined, { numeric: true, sensitivity: 'base' }) || a.hemi.localeCompare(b.hemi)
