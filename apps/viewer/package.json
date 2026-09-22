@@ -1,6 +1,6 @@
 {
   "name": "@brainana/viewer",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "description": "NiiVue-based viewer for brainana pipeline output. Domain app composed on the shared @brainana/* platform.",

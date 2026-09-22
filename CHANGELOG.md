@@ -2,7 +2,7 @@
 
 All notable changes to Brainana Viewer are documented here.
 
-## [Unreleased]
+## [1.1.0] — 2026-09-22
 
 Support for brainana 3.0.0, whose `anat.synthesis_level` gives a subject more than one
 reconstruction. Output from 1.x and 2.x is read exactly as before.
@@ -53,6 +53,12 @@ reconstruction. Output from 1.x and 2.x is read exactly as before.
   diverging map is read by its extremes. Categorical ROI chips keep their rounded corners.
 - The change tab separates its ROI fits table from the map controls with a border and a **ROI fits**
   title, matching the atlas legend.
+- **The bundled demo dataset is a brainana 3.0.0 run.** `datasets/demo_viewer/` was 1.3.0 output,
+  so the only dataset in the repo — and the only one CI validates against — predated the v3 support
+  this release adds. Same `sub-example` subject and the same 12 atlases; it is a
+  `synthesis_level: subject` tree, so it exercises the atlas, surface and report paths rather than
+  the scan picker or the change tab. The trim is now a script,
+  `scripts/build-demo-dataset.mjs`, rather than a paragraph describing what someone once copied.
 - **Installer filenames are hyphenated and carry their architecture** — `brainana-viewer-1.1.0-arm64.dmg`,
   `brainana-viewer-setup-1.1.0-x64.exe`, `brainana-viewer-1.1.0-x86_64.AppImage`. They were named
   from `productName`, so the space meant percent-encoded download URLs and shell quoting in every

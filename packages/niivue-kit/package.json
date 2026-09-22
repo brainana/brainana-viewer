@@ -1,6 +1,6 @@
 {
   "name": "@brainana/niivue-kit",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "description": "Generic NiiVue integration helpers shared by brainana vis tools: orientation gizmo and landmark/crosshair markers. Domain-agnostic (no brainana pipeline knowledge).",

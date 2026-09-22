@@ -1,6 +1,6 @@
 {
   "name": "@brainana/core-launcher",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "type": "module",
   "description": "Cross-platform launcher shared by every brainana tool: mint session token, scan a free loopback port, start the core server, open the default browser. Per-OS cache paths.",
