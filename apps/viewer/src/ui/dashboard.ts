@@ -24,15 +24,15 @@ import { createFunctionPanel, choiceKey, type FunctionPanel, type FunctionChoice
 import { createMorphologyPanel, type MorphologyPanel, type MarkerMode } from './panels/morphology.ts'
 import { createLongitudinalPanel, changeKey, hasChangeMaps, type LongitudinalPanel, type ChangeChoice } from './panels/longitudinal.ts'
 import { createRoiRateTable, type RoiRateTable } from './roiRateTable.ts'
-import { symmetricRobustRange, robustRange, rateUnitLabel, parseSegmentationAgreement, parseRoiRatesCsv, isTimeInterpretable, type Measure } from '../data/longitudinal.ts'
+import { symmetricRobustRange, robustRange, rateUnitLabel, parseSegmentationAgreement, parseRoiRatesCsv, isTimeInterpretable, type Measure, type Statistic } from '../data/longitudinal.ts'
 import { drawVisualField } from './visualFieldPlot.ts'
 import { h, errorText, selectField, asyncHandler } from '@brainana/ui/dom.ts'
 import { createSlider } from '@brainana/ui/components/slider.ts'
 import { mountSourcesDialog } from './dialogs/sources.ts'
 import { buildColormapAssets, availableColormaps } from '../niivue/colormaps.ts'
-import { buildColormapRegistry, type ColormapInfo } from '../data/colormap.ts'
+import { baseColormapKey, buildColormapRegistry, isReversedKey, reversedKey, toggleReversedKey, type ColormapInfo } from '../data/colormap.ts'
 import { surfaceLutFromColormap } from '../data/functional.ts'
-import { createColorDisplay, type ColorDisplay } from './components/colorDisplay.ts'
+import { createColorDisplay, type ColorDisplay, type ColorDisplayTarget } from './components/colorDisplay.ts'
 import { collectAtlasRows, collectVertex, collectMorphology, collectRetinotopy, collectSomatotopy, collectVisualFieldPoints } from '../report/collect.ts'
 import { BookmarkStore, bookmarkName, sameBookmarkIds } from '../report/bookmarks.ts'
 import { mountReportDialog } from '../report/dialog.ts'
@@ -218,12 +218,12 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
   root.innerHTML = ''
 
   // --- top bar: two rows (vol row + surf row), surf field aligned under the vol field ---
-  const monkeySelect = h('select', { id: 'monkey-select' }, [h('option', { value: '' }, ['select monkey…'])])
+  const monkeySelect = h('select', { id: 'monkey-select' }, [h('option', { value: '' }, ['select sub…'])])
   // Which reconstruction of the selected monkey is on screen. A subject has more than one only
   // when brainana ran at synthesis_level "session" or "session_longitudinal"; with one it stays
   // visible but disabled, so "this dataset has a single reconstruction" is distinguishable from
   // "this build has no scan picker".
-  const scanSelect = h('select', { id: 'scan-select', class: 'narrow', title: scanPickerTooltip(null) }) as HTMLSelectElement
+  const scanSelect = h('select', { id: 'scan-select', title: scanPickerTooltip(null) }) as HTMLSelectElement
   scanSelect.disabled = true
   const datasetBtn = h('button', { type: 'button', class: 'primary' }, ['dataset'])
   const volCheck = h('input', { type: 'checkbox' }) as HTMLInputElement
@@ -239,7 +239,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
   const fovGroup = h('div', { class: 'views fov-modes' }, fovBtns)
   const surfCheck = h('input', { type: 'checkbox' }) as HTMLInputElement
   surfCheck.checked = true
-  const surfSelect = h('select', { title: 'Cortical surface' })
+  const surfSelect = h('select', { title: 'Cortical surface', class: 'narrow' })
   const lhCheck = h('input', { type: 'checkbox' }) as HTMLInputElement
   lhCheck.checked = true
   const rhCheck = h('input', { type: 'checkbox' }) as HTMLInputElement
@@ -325,51 +325,74 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
     markerMode = markerModeSel.value() as MarkerMode
   }
 
-  // Two-row × four-column grid (fills column-by-column via grid-auto-flow: column). Full-height
-  // hairline dividers (`tb-divide`, each spanning both rows) separate the logical clusters.
-  const tbDivide = (): HTMLElement => h('div', { class: 'tb-divide' })
+  // The bar is a WRAPPING ROW OF CLUSTERS. Each `tb-group` is its own two-row grid holding the two
+  // stacked cells that belong together, separated from its neighbour by a leading hairline (CSS).
+  // Grouping them this way is what makes the bar safe at any width: when the window is too narrow a
+  // whole cluster drops to the next bar row, instead of a single cell re-wrapping and splitting a
+  // button group down the middle (which is how the four category tabs ended up 3 + 1).
+  // At the compact tier the marker field labels are clipped, so name them for the mouse too — the
+  // words stay in the <label>s, so the accessible names are unaffected either way.
+  markerSize.element.title = 'Marker size'
+  markerModeSel.element.title = 'Marker placement mode'
+  const tbGroup = (cls: string, cells: HTMLElement[]): HTMLElement =>
+    h('div', { class: cls ? `tb-group ${cls}` : 'tb-group' }, cells)
   const toolbar = h('header', { class: 'toolbar' }, [
-    // col 1: title (row 1) · version (row 2)
-    h('div', { class: 'tb-cell brand' }, ['Brainana Viewer']),
-    h('div', { class: 'tb-cell' }, [h('span', { class: 'badge' }, [`v${__APP_VERSION__}`])]),
-    tbDivide(),
-    // col 2: Dataset (row 1) · Monkey (row 2)
-    h('div', { class: 'tb-cell' }, [datasetBtn]),
-    h('div', { class: 'tb-cell' }, [
-      monkeySelect,
-      h('label', { class: 'tb-field inline' }, [h('span', {}, ['scan']), scanSelect]),
+    // title (row 1) · version + dataset (row 2)
+    tbGroup('', [
+      h('div', { class: 'tb-cell brand' }, ['Brainana Viewer']),
+      h('div', { class: 'tb-cell' }, [h('span', { class: 'tb-version' }, [`v${__APP_VERSION__}`]), datasetBtn]),
     ]),
-    tbDivide(),
-    // col 3: vol (row 1) · surf (row 2). LH/RH moved to col 4 row 1 (freed by the underlay rail).
-    h('div', { class: 'tb-cell' }, [
-      h('label', { class: 'tb-field inline' }, [volCheck, h('span', {}, ['vol']), volSelect]),
-      h('label', { class: 'tb-field inline' }, [h('span', {}, ['FOV']), fovGroup]),
+    // sub (row 1) · ses / reconstruction (row 2)
+    tbGroup('', [
+      h('div', { class: 'tb-cell' }, [h('label', { class: 'tb-field inline' }, [h('span', {}, ['sub']), monkeySelect])]),
+      h('div', { class: 'tb-cell' }, [h('label', { class: 'tb-field inline' }, [h('span', {}, ['ses']), scanSelect])]),
     ]),
-    h('div', { class: 'tb-cell' }, [
-      h('label', { class: 'tb-field inline' }, [surfCheck, h('span', {}, ['surf']), surfSelect]),
+    // vol (row 1) · surf (row 2). LH/RH live in the hemisphere/marker cluster (freed by the underlay rail).
+    tbGroup('', [
+      h('div', { class: 'tb-cell' }, [
+        h('label', { class: 'tb-field inline tb-layer-row' }, [volCheck, h('span', { class: 'tb-layer-name' }, ['vol']), volSelect]),
+        h('label', { class: 'tb-field inline' }, [h('span', {}, ['FOV']), fovGroup]),
+      ]),
+      h('div', { class: 'tb-cell' }, [
+        h('label', { class: 'tb-field inline tb-layer-row' }, [surfCheck, h('span', { class: 'tb-layer-name' }, ['surf']), surfSelect]),
+      ]),
     ]),
-    tbDivide(),
-    // col 3b: view section — slice montage layouts (row 1) · surface view presets (row 2)
-    h('div', { class: 'tb-cell' }, [h('div', { class: 'montage' }, layoutBtns)]),
-    h('div', { class: 'tb-cell' }, [h('div', { class: 'views' }, viewBtns)]),
-    tbDivide(),
-    // col 4: LH/RH hemisphere toggles in the vol row (row 1) — occupying the slot vacated by the
-    // crosshair + AP/SI/LR toggles, which now live in the right-hand underlay rail; surface marker +
-    // size + placement mode in the surf row (row 2).
-    h('div', { class: 'tb-cell' }, [
-      h('label', { class: 'tb-field inline' }, [lhCheck, h('span', {}, ['LH'])]),
-      h('label', { class: 'tb-field inline' }, [rhCheck, h('span', {}, ['RH'])]),
+    // view section — slice montage layouts (row 1) · surface view presets (row 2)
+    tbGroup('', [
+      h('div', { class: 'tb-cell' }, [h('div', { class: 'montage' }, layoutBtns)]),
+      h('div', { class: 'tb-cell' }, [h('div', { class: 'views' }, viewBtns)]),
     ]),
-    h('div', { class: 'tb-cell marker-controls' }, [
-      h('label', { class: 'tb-field inline' }, [markerCheck, h('span', {}, ['marker'])]),
-      markerSize.element,
-      markerModeSel.element,
+    // LH/RH hemisphere toggles in the vol row (row 1) — occupying the slot vacated by the crosshair +
+    // AP/SI/LR toggles, which now live in the right-hand underlay rail; surface marker + size +
+    // placement mode in the surf row (row 2).
+    tbGroup('', [
+      h('div', { class: 'tb-cell' }, [
+        h('label', { class: 'tb-field inline' }, [lhCheck, h('span', {}, ['LH'])]),
+        h('label', { class: 'tb-field inline' }, [rhCheck, h('span', {}, ['RH'])]),
+      ]),
+      h('div', { class: 'tb-cell marker-controls' }, [
+        h('label', { class: 'tb-field inline' }, [markerCheck, h('span', {}, ['marker'])]),
+        markerSize.element,
+        markerModeSel.element,
+      ]),
     ]),
-    tbDivide(),
-    // col 5: category tabs. The report controls that used to fill this column's second row moved to
-    // the left rail's `points` block, which has room to show the points themselves.
-    h('div', { class: 'tb-cell panels' }, panelBtns),
+    // Category tabs, as a 2x2 block across both rows — the report controls that used to fill the
+    // second row moved to the left rail's `points` block, which has room to show the points
+    // themselves, and four tabs on one line is the single widest thing in the bar.
+    h('div', { class: 'tb-group tb-tabs' }, panelBtns),
   ])
+  // Flex wrapping is invisible to CSS, so a cluster that starts a NEW bar row would draw an orphan
+  // leading hairline against the bar's left padding. Tag the row-starters by offsetTop and let the
+  // stylesheet drop the rule there.
+  const tbGroups = [...toolbar.querySelectorAll<HTMLElement>('.tb-group')]
+  const markToolbarRowStarts = (): void => {
+    let prevTop = -1
+    for (const g of tbGroups) {
+      g.classList.toggle('tb-row-start', g.offsetTop !== prevTop)
+      prevTop = g.offsetTop
+    }
+  }
+  new ResizeObserver(markToolbarRowStarts).observe(toolbar)
 
   // --- main grid ---
   const slicesCanvas = h('canvas', { id: 'slices', class: 'nv-canvas' }) as HTMLCanvasElement
@@ -392,7 +415,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
   // Function/morphology side-content slots carry no caption — the active selection is already shown
   // by the highlighted chip in the docked panel above, so a descriptive caption is redundant.
   const funcSlot = h('div', { class: 'side-slot', hidden: true })
-  const changeSlot = h('div', { class: 'side-slot', hidden: true })
+  const changeSlot = h('div', { class: 'side-slot change-slot', hidden: true })
   const morphSlot = h('div', { class: 'side-slot', hidden: true })
   const sidePlaceholder = h('div', { class: 'legend-title muted' }, ['Select atlas, morphology, or function above.'])
   const sideContent = h('div', { class: 'side-content' }, [legendSlot, funcSlot, changeSlot, morphSlot, sidePlaceholder])
@@ -418,7 +441,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
       ]),
     ]),
   ])
-  const placeholderText = h('p', { class: 'placeholder-text' }, ['Select a dataset, then choose a monkey to begin'])
+  const placeholderText = h('p', { class: 'placeholder-text' }, ['Select a dataset, then choose a sub to begin'])
   const asciiEl = h('pre', { class: 'monkey-ascii' }, [BRAINANA_ASCII_LOGO])
   const placeholderContent = h('div', { class: 'placeholder-content' }, [asciiEl, placeholderText])
   const placeholder = h('div', { class: 'monkey-placeholder' }, [placeholderContent])
@@ -1178,6 +1201,9 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
   // Colormap assets (gradient previews + raw LUTs) + registry, built once the view exists.
   let colormapGradients: Record<string, string> = {}
   let colormapLuts: Record<string, Uint8ClampedArray> = {}
+  let reversibleColormaps = new Set<string>()
+  const canReverse = (key: string | null | undefined): boolean =>
+    !!key && key !== LABELS_KEY && reversibleColormaps.has(baseColormapKey(key))
   let colormapInfos: ColormapInfo[] = []
   // The unified bottom "Color display" section + which overlay it currently targets.
   let colorDisplay: ColorDisplay | null = null
@@ -1443,16 +1469,25 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
   let changeChoice: ChangeChoice | null = null
   let changeOpacity = 1
   let changeThreshold = 0
-  let changeToken = 0
-  // Decoded per-vertex values, keyed by map. Feeds the display window, the quantizer AND the
-  // crosshair readout from one array, so the colour and the reported number cannot disagree.
+  // Decoded per-vertex values, keyed by SCAN and map. Feeds the display window, the quantizer AND
+  // the crosshair readout from one array, so the colour and the reported number cannot disagree.
+  //
+  // The scan is part of the key because a map key on its own ("thickness-rate") is identical for
+  // every subject and every reconstruction. Keyed on that alone, picking the same measure after a
+  // switch returned the PREVIOUS scan's vertex arrays -- painted on the new mesh, reported at the
+  // crosshair, and carried into the report's display range, all without a visible symptom.
   const changeValues = new Map<string, [Float32Array, Float32Array]>()
+  const changeCacheKey = (mapKey: string): string => `${manifest?.scan?.id ?? manifest?.id ?? '?'}::${mapKey}`
+  const cachedChange = (mapKey: string): [Float32Array, Float32Array] | undefined => changeValues.get(changeCacheKey(mapKey))
 
   const changeMapFor = (choice: ChangeChoice | null) =>
     choice ? (manifest?.longitudinal?.changeMaps.find((m) => m.key === changeKey(choice)) ?? null) : null
 
   const loadChangeValues = async (key: string, left: string, right: string): Promise<[Float32Array, Float32Array] | null> => {
-    const cached = changeValues.get(key)
+    // Resolved once, before the await, so the values are stored under the scan that asked for them
+    // even if the manifest moves on mid-flight.
+    const cacheKey = changeCacheKey(key)
+    const cached = changeValues.get(cacheKey)
     if (cached) return cached
     try {
       const [l, r] = await Promise.all(
@@ -1465,9 +1500,12 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
       )
       if (!l || !r) return null
       const pair: [Float32Array, Float32Array] = [l, r]
-      changeValues.set(key, pair)
+      changeValues.set(cacheKey, pair)
       return pair
-    } catch {
+    } catch (err) {
+      // Surfaced rather than swallowed: the caller treats null as "nothing to paint" and leaves the
+      // previous surface up, so a failed fetch was indistinguishable from a deliberate no-op.
+      showError(`Could not load the ${key} change map. ${errorText(err)}`)
       return null
     }
   }
@@ -1482,16 +1520,47 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
   const changeWindow = (values: [Float32Array, Float32Array], signed: boolean): { min: number; max: number } =>
     signed ? symmetricRobustRange(values) : robustRange(values)
 
-  const applyChangeSurface = async (): Promise<void> => {
+  // Single-flight, with coalescing. The previous token only guarded the LOAD: on a cache hit
+  // loadChangeValues resolves on a microtask, so a second call cleared the token check and entered
+  // setChangeSurface while the first was still inside it -- and #ensureFunctionLayer splices the
+  // layer out before re-adding it, so the two interleave on one slot and the surface goes black.
+  // A slider drag during the first paint was enough to trigger it.
+  //
+  // Serialising the whole apply is the discipline the comment above promises. Coalescing keeps a
+  // drag cheap: while one apply runs at most one more is pending, and it reads the latest state
+  // when its turn comes, so N events repaint once rather than N times.
+  let changeApplying: Promise<void> | null = null
+  let changeApplyQueued = false
+
+  const applyChangeSurface = (): Promise<void> => {
+    if (changeApplying) {
+      changeApplyQueued = true
+      return changeApplying
+    }
+    changeApplying = (async () => {
+      try {
+        do {
+          changeApplyQueued = false
+          await applyChangeSurfaceOnce()
+        } while (changeApplyQueued)
+      } finally {
+        changeApplying = null
+      }
+    })()
+    return changeApplying
+  }
+
+  const applyChangeSurfaceOnce = async (): Promise<void> => {
     if (!view) return
     const map = changeMapFor(changeChoice)
     if (!map) {
       view.clearChangeSurface()
       return
     }
-    const token = ++changeToken
     const values = await loadChangeValues(map.key, map.left, map.right)
-    if (token !== changeToken || !values) return
+    // A newer apply is already waiting: skip this paint rather than flashing a superseded map,
+    // and let the loop repaint from the latest state.
+    if (changeApplyQueued || !values) return
     const window = changeWindow(values, map.signed)
     const cmapLut = colormapLuts[changeColormapKey()] ?? view.colormapLut(changeColormapKey())
     if (!cmapLut) {
@@ -1508,27 +1577,29 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
     await view.setChangeSurface(map.key, { left: map.left, right: map.right }, binsFor(values[0]), binsFor(values[1]), lut, changeOpacity)
   }
 
-  // brainana's own diagnostic on whether segmenting a robust average shifted the CNN's input
-  // domain. Best-effort: it is context for the change maps, never a gate on showing them.
+  // Base segmentation agreement — fetched for the report when a change map is shown, not the panel.
+  // Called fire-and-forget from loadSubject, so it can resolve after a later scan has taken over:
+  // every write is gated on `mf` still being the manifest on screen, or a stale Dice table ends up
+  // in a report for a different reconstruction.
   const loadAgreement = async (mf: Manifest): Promise<void> => {
     const url = mf.longitudinal?.agreement
     lastAgreement = []
-    if (!url) {
-      longPanel?.setAgreement([])
-      return
-    }
+    if (!url) return
     try {
-      const rows = parseSegmentationAgreement(await client.apiFetch(url).then((r) => r.json()))
-      lastAgreement = rows
-      longPanel?.setAgreement(rows)
-    } catch {
+      const parsed = parseSegmentationAgreement(await client.apiFetch(url).then((r) => r.json()))
+      if (manifest === mf) lastAgreement = parsed
+    } catch (err) {
+      if (manifest !== mf) return
       lastAgreement = []
-      longPanel?.setAgreement([])
+      showError(`Could not read the base segmentation agreement — the report will omit it. ${errorText(err)}`)
     }
   }
 
   // The ROI fits, fetched as CSV (they are handed over as URLs rather than inlined: a few dozen
   // rows per hemisphere is not worth adding to every manifest for a panel that is usually closed).
+  // Fire-and-forget from loadSubject, and `roiRateTable` is rebuilt on every load — so both the
+  // success and the failure path check that `mf` is still the manifest on screen before touching
+  // it, or one scan's fits land in the next scan's freshly-built table.
   const loadRoiRates = async (mf: Manifest): Promise<void> => {
     const rates = mf.longitudinal?.roiRates
     if (!rates?.left || !rates?.right) {
@@ -1539,18 +1610,25 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
       const [left, right] = await Promise.all(
         [rates.left, rates.right].map((url) => client.apiFetch(url).then((r) => r.text()).then(parseRoiRatesCsv)),
       )
-      roiRateTable?.setRows(left, right)
-    } catch {
+      if (manifest === mf) roiRateTable?.setRows(left, right)
+    } catch (err) {
+      if (manifest !== mf) return
       roiRateTable?.clear()
+      // An empty table otherwise reads as "this scan has no ROI fits", which is a different claim.
+      showError(`Could not read the ROI fits for this scan. ${errorText(err)}`)
     }
   }
 
-  // Keep the table's measure, unit and per-scan marker in step with the map on screen.
+  // Keep the table's measure filter in step with the map on screen.
   const syncRoiRateTable = (): void => {
+    if (!roiRateTable) return
     const map = changeMapFor(changeChoice)
-    if (!map || !roiRateTable) return
-    const info = manifest?.longitudinal ?? null
-    roiRateTable.setMeasure(map.measure as Measure, rateUnitLabel(info, map), !isTimeInterpretable(info))
+    // No map selected means the panel is on `none`, so the table lists nothing with it. Returning
+    // early instead would strand it on its own default measure, showing rates for a map nobody
+    // picked. setMeasure(null) rather than clear() -- the fits stay loaded for the next selection.
+    roiRateTable.setMeasure(map ? (map.measure as Measure) : null)
+    // The table lists all three statistics; this just marks the one on the surface.
+    if (map) roiRateTable.setStatistic(map.statistic as Statistic)
   }
 
   const selectChange = async (choice: ChangeChoice | null): Promise<void> => {
@@ -1559,6 +1637,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
     longPanel?.setActive(changeChoice ? changeKey(changeChoice) : null)
     if (!changeChoice) {
       view?.clearChangeSurface()
+      syncRoiRateTable() // empties the ROI list too, so panel, surface and table agree on "nothing"
       refreshColorDisplay()
       updateSurfaceReport()
       return
@@ -1603,12 +1682,17 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
     return funcChoice.mode.id === 'polar' ? 'wheel' : funcChoice.mode.id === 'eccentricity' ? 'rings' : 'bar'
   }
 
+  // Every target goes through here so `showReverse` is ANDed with "this map has a twin" in one
+  // place rather than at each of the four call sites below.
+  const setColorTarget = (t: ColorDisplayTarget): void =>
+    colorDisplay?.setTarget({ ...t, showReverse: (t.showReverse ?? t.showLegend !== false) && canReverse(t.colormap) })
+
   const refreshColorDisplay = (): void => {
     if (!colorDisplay) return
     const target = colorTarget()
     if (target === 'function' && funcChoice) {
       const key = funcColormapKey()
-      colorDisplay.setTarget({
+      setColorTarget({
         title: `${funcChoice.kind === 'retinotopy' ? 'Retinotopy' : 'Somatotopy'} · ${funcChoice.mode.label}`,
         colormap: key,
         legendShape: legendShapeForFunc(),
@@ -1625,15 +1709,16 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
         // Somatotopy's 0–100 axis is a body map (foot → hand → face); anchor the bar with those
         // parts so the numbers read as anatomy. Retinotopy uses wheel/rings legends (no bar ticks).
         barTicks: funcChoice.kind === 'somatotopy' ? ['foot', 'hand', 'face'] : undefined,
+        reversed: isReversedKey(key),
         colormaps: colormapInfos.filter((i) => i.key !== LABELS_KEY), // "labels" is atlas-only
       })
     } else if (target === 'longitudinal' && changeChoice) {
       const map = changeMapFor(changeChoice)
       const key = changeColormapKey()
-      const values = changeValues.get(changeKey(changeChoice))
+      const values = cachedChange(changeKey(changeChoice))
       const window = values && map ? changeWindow(values, map.signed) : { min: -1, max: 1 }
       const unit = map ? rateUnitLabel(manifest?.longitudinal ?? null, map) : ''
-      colorDisplay.setTarget({
+      setColorTarget({
         title: `change · ${changeChoice.measure} ${changeChoice.statistic}${unit ? ` (${unit})` : ''}`,
         colormap: key,
         legendShape: 'bar',
@@ -1648,12 +1733,13 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
         // A signed map's bar is anchored at its neutral middle, so the reader is told what the
         // centre colour means rather than inferring it from two numeric endpoints.
         barTicks: map?.signed ? ['decrease', 'no change', 'increase'] : undefined,
+        reversed: isReversedKey(key),
         colormaps: colormapInfos.filter((i) => i.key !== LABELS_KEY),
       })
     } else if (target === 'morphology') {
       const metric = morphActiveMetric()
       const key = morphColormaps[metric] ?? 'gray'
-      colorDisplay.setTarget({
+      setColorTarget({
         title: `morphology · ${metric}`,
         colormap: key,
         legendShape: 'bar',
@@ -1664,12 +1750,13 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
         clip: 'range',
         clipDomain: MORPH_DOMAIN[metric],
         clipValue: morphClip[metric],
+        reversed: isReversedKey(key),
         colormaps: colormapInfos.filter((i) => i.key !== LABELS_KEY), // "labels" is atlas-only
       })
     } else if (target === 'atlas' && lastAtlasSel) {
       const key = atlasColormap ?? LABELS_KEY
       const continuous = atlasColormap !== null
-      colorDisplay.setTarget({
+      setColorTarget({
         title: `atlas · ${lastAtlasSel.name}`,
         colormap: key,
         legendShape: 'bar',
@@ -1685,6 +1772,9 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
         displayDomain: atlasDomain,
         displayRange: { min: atlasDisplayMin, max: atlasDisplayMax },
         showDisplayRange: continuous,
+        reversed: isReversedKey(key),
+        // Labels mode has no ramp to flip; the toggle follows the legend's continuous gate.
+        showReverse: continuous,
         // A continuous gradient has no categorical mode, so don't offer "none" in the picker.
         colormaps: atlasContinuous ? colormapInfos.filter((i) => i.key !== LABELS_KEY) : colormapInfos,
         clip: continuous ? 'range' : 'none',
@@ -1699,6 +1789,16 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
     }
     // The overlay-value probe in Coordinates tracks the same target — refresh it on overlay/tab change.
     updateOverlayValue()
+  }
+
+  // The colormap key the active overlay is currently painted with — the one the reverse toggle flips.
+  const activeColormapKey = (): string | null => {
+    const t = colorTarget()
+    if (t === 'function') return funcColormapKey()
+    if (t === 'longitudinal') return changeColormapKey()
+    if (t === 'morphology') return morphColormaps[morphActiveMetric()] ?? 'gray'
+    if (t === 'atlas') return atlasColormap
+    return null
   }
 
   // Route the section's controls to whichever overlay is active.
@@ -1723,6 +1823,14 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
         applyAtlasColormap() // recolors BOTH the volume slices and the 3D surface
         refreshColorDisplay()
       }
+    },
+    // Reversing is just a different colormap key (`<key>_r`), so it reuses onColormap wholesale --
+    // no second state field, no second apply path, and the reversed key flows into the report and
+    // the session snapshot the same way a forward one does.
+    onReverse: (): void => {
+      const key = activeColormapKey()
+      if (!canReverse(key)) return
+      colorDisplayCallbacks.onColormap(toggleReversedKey(key!))
     },
     onDisplayRange: (min: number, max: number): void => {
       const t = colorTarget()
@@ -1867,7 +1975,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
     // the whole time-source machinery exists to prevent.
     const changeMap = changeMapFor(changeChoice)
     if (changeMap && vertex) {
-      const values = changeValues.get(changeMap.key)
+      const values = cachedChange(changeMap.key)
       const hemi = currentNode.hemi === 0 ? 0 : 1
       const value = values?.[hemi]?.[vertex.index]
       const unit = rateUnitLabel(manifest?.longitudinal ?? null, changeMap)
@@ -2131,7 +2239,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
         const map = changeMapFor(changeChoice)
         if (!map || !changeChoice) return null
         const info = manifest?.longitudinal ?? null
-        const values = changeValues.get(map.key)
+        const values = cachedChange(map.key)
         return {
           measure: map.measure,
           statistic: map.statistic,
@@ -2363,7 +2471,15 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
     // per-ROI label table (the ROI list above), so the picker reads "none" with a neutral swatch.
     const built = buildColormapRegistry(availableColormaps(created.slices))
     colormapInfos = [{ key: LABELS_KEY, label: 'none', group: 'Brainana' }, ...built]
-    const assets = buildColormapAssets(created.slices, built.map((c) => c.key))
+    // Reversed twins are registered and sampled, but deliberately NOT added to colormapInfos:
+    // infos is what the picker LISTS, gradients/luts is what can be RENDERED. The reverse toggle
+    // reaches the twins by key, so the dropdown stays one row per map instead of two.
+    const baseKeys = built.map((c) => c.key)
+    // Only the maps that actually gained a twin may be reversed. NiiVue substitutes `gray` for an
+    // unregistered key instead of throwing, so an ungated toggle would silently repaint the
+    // overlay in grayscale and look like a deliberate choice.
+    reversibleColormaps = new Set(created.registerReversedColormaps(baseKeys))
+    const assets = buildColormapAssets(created.slices, [...baseKeys, ...baseKeys.map(reversedKey)])
     colormapGradients = { ...assets.gradients, [LABELS_KEY]: 'linear-gradient(90deg, #6b6b6b, #6b6b6b)' }
     colormapLuts = assets.luts
     colorDisplay = createColorDisplay(colorDisplayCallbacks, colormapGradients, colormapInfos)
@@ -2403,6 +2519,10 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
   // switching monkeys is a slow deliberate act, so overlapping loads were not reachable. The scan
   // picker is a second, much faster entry point: without this, two runs both mutate `manifest`,
   // the dropdowns and every panel, and the result is a mix of two reconstructions.
+  //
+  // The check has to be repeated after EVERY await, not just the fetch. Everything below reads the
+  // module-level `manifest`, so an overtaken run that only checked once carried on painting against
+  // the winner's manifest while still holding its own snapshot.
   let loadRun = 0
 
   const loadSubject = async (sourceId: string, subjectId: string, wantScanId: string | null = null): Promise<void> => {
@@ -2441,14 +2561,12 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
       const fetched = (await files.getManifest(sourceId, subjectId, wantScanId)) as unknown as Manifest
       if (stale()) return
       manifest = fetched
-      // Bookmarked points are coordinates in THIS subject's space; carrying them across a switch
-      // would silently relabel them as points in the incoming subject. Cleared only once the
-      // manifest is in hand: a failed fetch leaves the previous subject on screen, and its points
-      // must survive with it.
       // Points are coordinates in the OUTGOING reconstruction's space, carrying values sampled
       // from its volumes and overlays; keeping them would silently relabel them as points in the
       // incoming one. True across a scan switch as much as a subject switch -- even between the
       // base and one of its timepoints, where the frame matches but the values do not.
+      // Cleared only once the manifest is in hand: a failed fetch leaves the previous scan on
+      // screen, and its points must survive with it.
       const previous = snap?.scan ?? null
       clearedFrom =
         bookmarks.count() > 0
@@ -2458,8 +2576,10 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
           : null
       bookmarks.clear()
       renderedPointIds = null
-      // The server resolves an id it does not recognise to the subject's default, so read the
-      // active scan back from the manifest rather than trusting what was asked for.
+      // Read the active scan back from the manifest rather than echoing what was asked for. The
+      // server 404s an id it does not recognise (it never falls back to a different scan), so a
+      // successful fetch has already agreed on the scan -- and on a request with no `?scan=` at
+      // all, the manifest is the only thing that knows which default was chosen.
       lastScan = manifest.scan ?? null
       populateScanSelect(manifest)
       store.update({ sourceId, subjectId, scanId: lastScan?.id ?? null, scanStream: lastScan?.stream ?? null })
@@ -2489,6 +2609,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
       applyMorphSnapshot(snap?.morph ?? null, manifest)
 
       view = await (viewReady ??= ensureView())
+      if (stale()) return
 
       // Apply the sticky fov preference to the incoming subject. It degrades to 'best' when this
       // dataset has no full-FOV volume, without clearing the preference, so a later subject that
@@ -2502,11 +2623,14 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
       // A subject with NO volume still syncs, because that call is also what hides the rail —
       // skipping it would leave the previous subject's rail on screen.
       const superseded = baseUrl ? !(await view.setBaseVolume(baseUrl, 1)) : false
+      if (stale()) return
       if (!superseded) syncVolumeControls() // seed the underlay rail (window/clip/zoom), or hide it
       syncFovControls() // reflect availability + mode for this subject on the fov switch
       // Reference surface for node lookup (pial in world space; fall back to white).
       await view.setReference(manifest.surfaces.pial ?? manifest.surfaces.white)
+      if (stale()) return
       if (surfDefault) await applySurface(surfDefault)
+      if (stale()) return
       setActiveLayout(store.get('layout')) // sizes the surface pane before we auto-fit
       // Fresh load: frame the mesh to this pane. A snapshot restore instead reapplies the saved
       // camera further below, so it wins over the fit (Req 11).
@@ -2535,6 +2659,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
       lastAtlasSel = snap?.lastAtlasSel && manifest.atlases?.some((a) => a.name === snap.lastAtlasSel!.name) ? snap.lastAtlasSel : null
       if (snap?.activeOverlay === 'atlas' && lastAtlasSel) {
         await selectAtlas(lastAtlasSel) // selectAtlas sets colormap (magma for float atlases, else categorical), hidden→∅
+        if (stale()) return
         view!.setSurfaceOverlayOpacity(atlasOpacity)
         if (snap.atlas.colormap && snap.atlas.colormap !== atlasColormap) {
           atlasColormap = snap.atlas.colormap
@@ -2544,6 +2669,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
         refreshColorDisplay()
       } else {
         await selectAtlas(null)
+        if (stale()) return
       }
       loadReportSpecs(manifest)
 
@@ -2581,6 +2707,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
       sidePicker.append(functionPanel.element)
 
       // --- longitudinal change maps (base template scans only) ---
+      longPanel?.element.remove()
       longPanel = createLongitudinalPanel(
         manifest,
         {
@@ -2600,17 +2727,19 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
       sidePicker.append(longPanel.element)
       roiRateTable = createRoiRateTable()
       changeSlot.innerHTML = ''
-      changeSlot.append(roiRateTable.element)
+      changeSlot.append(
+        h('div', { class: 'legend-title' }, ['ROI fits']),
+        roiRateTable.element,
+      )
       void loadRoiRates(manifest)
       changeBtn.hidden = !hasChangeMaps(manifest)
-      // A scan without change maps cannot stay docked on a tab that no longer exists.
-      if (!hasChangeMaps(manifest) && dockedTab === 'longitudinal') dockedTab = null
       void loadAgreement(manifest)
       // Restore the remembered function map if this subject has the same map kind; else clear. Pass the
       // snapshot settings THROUGH selectFunction (single surface pass) for an exact "carry over" match.
       lastFuncChoice = snap?.lastFuncChoice ? functionPanel.getChoice(choiceKey(snap.lastFuncChoice)) : null
       if (snap?.activeOverlay === 'function' && lastFuncChoice) {
         await selectFunction(lastFuncChoice, snap.func)
+        if (stale()) return
       } else {
         funcChoice = null
       }
@@ -2638,6 +2767,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
 
       // Restore the docked side tab (which picker is open); overlays were restored above.
       dockedTab = snap ? snap.dockedTab : null
+      if (!hasChangeMaps(manifest) && dockedTab === 'longitudinal') dockedTab = null
       updateTabUI()
 
       // Restore the surface camera (zoom + orientation) and the crosshair coordinate, so the switch is
@@ -2691,7 +2821,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
     const run = ++monkeyRun
     const list = sources.list()
     const frag = document.createDocumentFragment()
-    frag.append(h('option', { value: '' }, ['select monkey…']))
+    frag.append(h('option', { value: '' }, ['select sub…']))
     for (const src of list) {
       let monkeys: MonkeySummary[] = []
       try {
