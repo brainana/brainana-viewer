@@ -86,6 +86,12 @@ export function parseMgh(buffer) {
 
 // Vertex count of a hemisphere's mesh, read from a fixed-size header -- no full file read.
 // Tries the cheap morphometry headers first, then the surface itself. null when nothing is readable.
+//
+// A count of 0 is returned as null, NOT as 0. Buffer.alloc zero-fills, and an SFTP mirror writes a
+// failed transfer as a sized but zero-filled placeholder, so a zeroed header parses as a perfectly
+// well-formed count of zero. The caller's guard is `expected == null`, so returning 0 made every
+// surface overlay for that reconstruction mismatch and vanish behind a "vertex count does not
+// match" warning that pointed at the wrong thing entirely.
 export function surfaceVertexCount(surfDir, hemi) {
   for (const name of [`${hemi}.thickness`, `${hemi}.curv`, `${hemi}.sulc`]) {
     const file = path.join(surfDir, name)
@@ -93,14 +99,17 @@ export function surfaceVertexCount(surfDir, hemi) {
     try {
       const head = Buffer.alloc(15)
       const fd = fs.openSync(file, 'r')
+      let read = 0
       try {
-        fs.readSync(fd, head, 0, 15, 0)
+        read = fs.readSync(fd, head, 0, 15, 0)
       } finally {
         fs.closeSync(fd)
       }
+      if (read < 15) continue // truncated: the tail would read as zeros
       const magic = (head[0] << 16) | (head[1] << 8) | head[2]
-      if (magic === 0xffffff) return head.readInt32BE(3)
-      return magic // legacy int16 format stores the count in the magic slot
+      const count = magic === 0xffffff ? head.readInt32BE(3) : magic // legacy int16 keeps it in the magic slot
+      if (count > 0) return count
+      // Zero or negative: an unreadable header, not a mesh with no vertices. Try the next candidate.
     } catch {
       // fall through to the next candidate
     }
@@ -108,7 +117,8 @@ export function surfaceVertexCount(surfDir, hemi) {
   const surface = path.join(surfDir, `${hemi}.white`)
   if (!exists(surface)) return null
   try {
-    return readFsSurface(fs.readFileSync(surface)).vertexCount
+    const count = readFsSurface(fs.readFileSync(surface)).vertexCount
+    return count > 0 ? count : null
   } catch {
     return null
   }
@@ -291,7 +301,14 @@ export function ensureDerivedAssets(outputRoot, fsDir, { cacheKey, baseDir = nul
   const cacheRoot = path.join(outputRoot, '.brainana-viewer-cache', 'surface-spacing-v2')
   const cache = path.join(cacheRoot, cacheKey)
   if (!containedIn(cacheRoot, cache)) throw new Error('Derived-asset cache key escapes the cache root')
-  fs.mkdirSync(cache, { recursive: true })
+  // Node's fs errors embed the absolute path they failed on, and the route serialises
+  // `error.message` straight to the browser -- which would hand a client the operator's real
+  // directory layout for nothing more than a read-only data root. Re-thrown without it.
+  try {
+    fs.mkdirSync(cache, { recursive: true })
+  } catch {
+    throw new Error('Cannot create the derived-asset cache directory (check the data root is writable)')
+  }
   const result = { shapes: {}, displaySurfaces: {}, longMaps: {}, longRanges: {} }
 
   for (const hemi of ['lh', 'rh']) {
@@ -299,9 +316,15 @@ export function ensureDerivedAssets(outputRoot, fsDir, { cacheKey, baseDir = nul
       const src = path.join(surf, `${hemi}.${metric}`)
       if (!exists(src)) continue
       const dest = path.join(cache, `${hemi}.${metric}.shape.gii`)
-      if (!exists(dest) || fs.statSync(dest).mtimeMs < fs.statSync(src).mtimeMs) {
-        const values = parseFsMorphology(fs.readFileSync(src))
-        fs.writeFileSync(dest, giftiShape(values))
+      try {
+        if (!exists(dest) || fs.statSync(dest).mtimeMs < fs.statSync(src).mtimeMs) {
+          const values = parseFsMorphology(fs.readFileSync(src))
+          fs.writeFileSync(dest, giftiShape(values))
+        }
+      } catch {
+        // One unreadable morphometry file must not fail the whole manifest, and its absolute path
+        // must not reach the client. The metric is simply not offered. Matches the long-map loop.
+        continue
       }
       result.shapes[`${hemi}.${metric}`] = dest
     }
