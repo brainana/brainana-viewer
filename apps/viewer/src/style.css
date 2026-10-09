@@ -415,8 +415,12 @@ input.point-name { grid-area: name; width: 100%; min-width: 0; padding: 0 var(--
   flex: 0 0 4.00rem;
   white-space: nowrap;
 }
-/* Content below the docked picker; exactly one slot is visible at a time (ROI legend / func / morph). */
-.side-content { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+/* Content below the docked picker; exactly one slot is visible at a time (ROI legend / func / morph).
+   Zero flex-basis, not `auto`: the virtualized ROI legend's spacer is rows x 20px tall (D99 ~7400px),
+   and shrink is shared in proportion to basis, so an auto basis crushed the picker to one line and
+   the atlas could not be switched. With basis 0 the picker and colour dock keep their natural height
+   and this slot takes the remainder; the min-height floor keeps a few legend rows on short columns. */
+.side-content { flex: 1 1 0; min-height: 120px; display: flex; flex-direction: column; }
 /* `overflow: hidden` is the safety net for the whole column: `.color-dock` is a LATER sibling, so
    anything a squeezed slot lets escape paints on top of the COLOR DISPLAY block rather than being
    clipped. A slot that runs out of room truncates; it never overlaps. */

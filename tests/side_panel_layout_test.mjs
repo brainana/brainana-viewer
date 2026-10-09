@@ -59,6 +59,18 @@ for (const selector of ['.color-dock', '.side-picker']) {
   console.log(`  ok - ${selector} scrolls its own overflow`)
 }
 
+// The content slot must not bring its content height into the shrink budget: the virtualized ROI
+// legend's spacer is rows x 20px (D99 ~7400px), and shrink is shared in proportion to flex-basis, so
+// with `flex: 1 1 auto` a long atlas squeezed the picker to ~20px and the atlas could not be switched.
+const content = rule('.side-content')
+const contentFlex = content.match(/flex:\s*([^;]+);/)
+assert.ok(contentFlex, '.side-content must declare flex')
+assert.match(contentFlex[1].trim(), /^1\s+1\s+0(px|%)?$/,
+  '.side-content needs a zero flex-basis, or a long ROI legend crushes the docked picker')
+assert.match(content, /min-height:\s*[1-9]/, '.side-content needs a non-zero floor so the legend keeps some rows')
+passed++
+console.log('  ok - a long ROI legend cannot squeeze the docked picker')
+
 // The ROI fits controls sit in the block that cannot shrink, so their line count is load-bearing:
 // three 96px `select.narrow` fields wrapped to three lines at the panel's 220-280px.
 const controls = rule('.roi-rate-controls')
