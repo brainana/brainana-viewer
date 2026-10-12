@@ -5,7 +5,8 @@
 import { RINGS, ECC_MAX, type VfPoint, type VfStats } from '../data/visualField.ts'
 
 // The plot is drawn to a 2D canvas, which can't read CSS custom properties directly, so we read
-// the theme tokens once (they're static — no runtime theme toggle) and derive concrete colors.
+// the theme tokens and derive concrete colors — cached per theme (settings → appearance can switch
+// it at runtime; the theme is the data-theme attribute on <html>).
 interface VfTheme {
   text: string
   muted: string
@@ -16,8 +17,11 @@ interface VfTheme {
   font: string
 }
 let cachedTheme: VfTheme | null = null
+let cachedFor: string | undefined
 function theme(): VfTheme {
-  if (cachedTheme) return cachedTheme
+  const active = document.documentElement.dataset.theme
+  if (cachedTheme && cachedFor === active) return cachedTheme
+  cachedFor = active
   const s = getComputedStyle(document.documentElement)
   const g = (name: string, fallback: string): string => s.getPropertyValue(name).trim() || fallback
   cachedTheme = {

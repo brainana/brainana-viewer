@@ -389,13 +389,13 @@ input.point-name { grid-area: name; width: 100%; min-width: 0; padding: 0 var(--
 .legend-row:hover { background: var(--panel-2); }
 .legend-row.hidden-roi { opacity: 0.45; }
 .legend-checkbox { color: var(--accent); font-size: var(--fs-sm); text-align: center; }
-.legend-swatch { width: 12px; height: 12px; border-radius: var(--r-xs); border: 1px solid rgba(255,240,210,0.15); }
+.legend-swatch { width: 12px; height: 12px; border-radius: var(--r-xs); border: 1px solid color-mix(in srgb, var(--text) 15%, transparent); }
 .legend-id { font-size: var(--fs-sm); color: var(--muted); font-variant-numeric: tabular-nums; }
 .legend-label { font-size: var(--fs-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* WM/CSF (negative-id) rows: present in the volume slices but clipped on the surface. */
 .legend-vol-only {
   font-size: var(--fs-sm); color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em;
-  padding: 0 4px; border: 1px solid rgba(255,240,210,0.15); border-radius: var(--r-xs); line-height: 1.4;
+  padding: 0 4px; border: 1px solid color-mix(in srgb, var(--text) 15%, transparent); border-radius: var(--r-xs); line-height: 1.4;
 }
 
 /* Docked category picker: sits at the top of the side panel (no longer a floating overlay).
@@ -475,7 +475,7 @@ input.point-name { grid-area: name; width: 100%; min-width: 0; padding: 0 var(--
   display: grid; grid-template-columns: 74px 64px minmax(120px, 1fr); align-items: baseline; gap: var(--sp-3);
   padding: 2px 4px; border-radius: var(--r-xs); font-size: var(--fs-sm);
 }
-.atlas-report-row:nth-child(odd) { background: rgba(255,255,255,.025); }
+.atlas-report-row:nth-child(odd) { background: color-mix(in srgb, var(--text) 3%, transparent); }
 .atlas-report-name { color: var(--muted); font-weight: 600; }
 .atlas-report-id { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
 .atlas-report-label { color: var(--label-gold); overflow-wrap: anywhere; }
@@ -701,7 +701,7 @@ input.point-name { grid-area: name; width: 100%; min-width: 0; padding: 0 var(--
    Categorical chips like .legend-swatch keep --r-xs -- they have no endpoints to lose. */
 .cmap-swatch {
   flex: 0 0 auto; width: 34px; height: 14px;
-  border: 1px solid rgba(255,240,210,.15);
+  border: 1px solid color-mix(in srgb, var(--text) 15%, transparent);
   /* The gradient must be SIZED to the border box, not just painted over it. By default a background
      is positioned against the padding box but clipped to the border box, so a 34px swatch sized a
      32px gradient tile and then filled the leftover 1px strips by REPEATING it -- putting the map's
@@ -986,6 +986,17 @@ details.panel-note > summary + p { margin-top: var(--sp-2); }
 /* ---------- personal appearance (settings → appearance) ----------
    Overrides of the shared tokens (packages/ui/theme.css), keyed off attributes set on <html> by
    settings/preferences.ts. The default theme sets nothing. Image canvases are unaffected. */
+:root[data-theme="light"] {
+  --bg: #efebe2; --panel: #f8f6f1; --panel-2: #ffffff; --elev: #e6dfd0;
+  --text: #24211b; --muted: #675f4f; --border: #ddd5c4; --border-2: #c4b9a3;
+  --accent: #a35f00; --accent-2: #7a4600; --accent-ink: #ffffff; --accent-glow: rgba(163,95,0,.16);
+  --accent-tint: color-mix(in srgb, var(--accent) 12%, var(--panel-2));
+  --danger: #b8382b; --ok: #3d7a28; --warn: #8f5e00; --gold: #7d6000;
+  --shadow-sm: 0 1px 0 rgba(0,0,0,.03), 0 4px 12px -8px rgba(60,45,20,.25);
+  --shadow: 0 1px 0 rgba(0,0,0,.03), 0 14px 34px -18px rgba(60,45,20,.35);
+  color-scheme: light;
+}
+:root[data-theme="light"] .overlay { background: rgba(40,32,18,.35); }
 :root[data-theme="neutral"] {
   --bg: #111418; --panel: #191d23; --panel-2: #21262e; --elev: #2a313b;
   --text: #e6eaf0; --muted: #98a3b1; --border: #29303a; --border-2: #38414d;

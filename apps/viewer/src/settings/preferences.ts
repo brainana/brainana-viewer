@@ -17,6 +17,7 @@ export const PREFERENCES_CHANGED = 'brainana-preferences-changed'
 
 export const THEMES = [
   { value: 'graphite', label: 'graphite + amber' },
+  { value: 'light', label: 'light' },
   { value: 'neutral', label: 'neutral dark' },
   { value: 'contrast', label: 'high contrast' },
 ] as const

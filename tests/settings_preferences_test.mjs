@@ -32,6 +32,7 @@ assert.deepEqual(normalizePreferences('nonsense'), DEFAULTS)
     unknownSection: { a: 1 },
   })
   assert.equal(p.appearance.theme, DEFAULTS.appearance.theme, 'unknown enum value falls back')
+  assert.equal(normalizePreferences({ appearance: { theme: 'light' } }).appearance.theme, 'light')
   assert.equal(p.appearance.textSize, 'large')
   assert.equal(p.appearance.largeControls, false, 'wrong type falls back')
   assert.equal(p.viewing.layout, 'grid')

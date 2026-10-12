@@ -3035,7 +3035,10 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
   const applyNavigationPrefs = (): void => {
     if (view) view.slices.opts.invertScrollDirection = prefs().navigation.reverseScroll
   }
-  window.addEventListener(PREFERENCES_CHANGED, applyNavigationPrefs)
+  window.addEventListener(PREFERENCES_CHANGED, () => {
+    applyNavigationPrefs()
+    updateVisualField() // canvas-drawn: repaint in the current theme's colours
+  })
 
   // Panel sizes are the CSS tracks the resizers drag. Restored before the first subject loads.
   const PANEL_VARS: Array<[HTMLElement, string]> = [
