@@ -33,6 +33,8 @@ Windows, and Linux**.
   mean, and percent change fitted by Brainana, with a magnitude threshold and a per-ROI summary table.
 - **HTML reports** — Bookmark locations and export a self-contained report with file provenance,
   region and measurement readouts, and screenshots.
+- **Guided tour** — A step-by-step guide from adding data to every tool your subject has.
+- **Settings** — Your own defaults for new subjects, navigation, reports and appearance.
 
 ## Download & install
 
@@ -65,7 +67,8 @@ loaded — add a dataset to begin (see [Quick start](#quick-start)).
 
 ## Quick start
 
-The app opens on a welcome screen with nothing loaded. To get started:
+The app opens on a welcome screen with nothing loaded. To get started — or click **guided setup**
+(top-left) and let the guide walk you through it:
 
 1. **Add a dataset.** Click **dataset** (top-left) and point the Viewer at a **Brainana output
    directory** — a folder that contains `sub-*` subject folders. You can use a **local** path or a
@@ -143,6 +146,20 @@ The exported report includes:
 - **Screenshots** — a slice montage, a 3D surface view, and one image per point.
 
 ---
+
+## Settings
+
+Click **settings** (top-left), or press Ctrl+, (⌘, on macOS). Changes save as you make them.
+
+- **viewing** — what a new subject opens with: layout, surface, hemispheres, crosshair, marker and
+  field of view. Turn off *keep my current choices* to start every subject from these defaults;
+  **apply to current view** applies them now.
+- **navigation** — scroll direction and the arrow-key step.
+- **reports** — whether reports include screenshots, and where they are saved by default.
+- **guide** — open the guided tour on launch; remember where you left off.
+- **appearance** — theme, text size and larger controls. Image colours are not affected.
+
+Use **export** / **import** to copy your settings to another computer.
 
 ## Citing Brainana
 

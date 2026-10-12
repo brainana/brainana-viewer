@@ -2,6 +2,22 @@
 
 All notable changes to Brainana Viewer are documented here.
 
+## [Unreleased]
+
+### Added
+
+- **Guided tour** — **guided setup** (top-left) walks you from adding a dataset to a loaded subject,
+  then tours each tool that subject has, highlighting the control it describes. Hide it and resume
+  later, or jump to any stop.
+- **Settings** — **settings** (top-left, Ctrl/⌘+,, or the app menu): defaults for new subjects,
+  scroll direction and arrow-key step, report defaults, guide options, and appearance (theme, text
+  size, larger controls). Settings can be exported and imported.
+
+### Changed
+
+- The desktop app now keeps recent datasets, saved connections and settings in its own data folder,
+  so they are no longer lost when the app starts on a different port.
+
 ## [1.1.0] — 2026-09-22
 
 Support for brainana 3.0.0, whose `anat.synthesis_level` gives a subject more than one

@@ -56,8 +56,9 @@ bootServer(options)           │
 | File | Role |
 |---|---|
 | `packages/core-desktop/main.mjs` | Tool-agnostic Electron main process (`runDesktop(options)`): single-instance lock, GPU-blocklist opt-out, `bootServer`, window creation, server-tied-to-window shutdown. Domain-free — mirrors `core-launcher`. |
-| `packages/core-desktop/window.mjs` | `createMainWindow(url, { appLabel })`: the hardened `BrowserWindow` (`contextIsolation` on, `nodeIntegration` off, `sandbox` on). Reused unchanged by future tools. |
-| `packages/core-desktop/menu.mjs` | `applyAppMenu(appLabel)`: a curated role-based application menu (preserves Quit/Copy/Paste/Reload/DevTools/Zoom accelerators) replacing Electron's noisy default. Reused by future tools. |
+| `packages/core-desktop/window.mjs` | `createMainWindow(url, { appLabel, preload })`: the hardened `BrowserWindow` (`contextIsolation` on, `nodeIntegration` off, `sandbox` on). `preload` attaches the preference bridge only. Reused unchanged by future tools. |
+| `packages/core-desktop/menu.mjs` | `applyAppMenu(appLabel, { settings })`: a curated role-based application menu (preserves Quit/Copy/Paste/Reload/DevTools/Zoom accelerators) replacing Electron's noisy default; `settings` adds **Settings…** (Cmd/Ctrl+,). Reused by future tools. |
+| `packages/core-desktop/preferenceStore.mjs`, `preload.cjs` | Desktop preference storage (see below). |
 | `packages/core-launcher/launch.mjs` | Now exports **`bootServer`** (shared core) alongside `launch` (browser opener). |
 | `apps/viewer/desktop.mjs` | Composition root: injects `viewerManifestProvider` + Viewer identity into `runDesktop`. The only place Viewer domain meets the desktop shell. Structurally identical to `apps/viewer/launch.mjs`. |
 | `apps/viewer/electron-builder.yml` | Packaging config: per-OS targets, asar, file include/exclude, native-module unpack. |
@@ -136,6 +137,24 @@ cannot load from inside an asar). Net: SFTP works either way.
   `mac.identity: null` in the yml selects ad-hoc (unsigned) signing.
 - **Wider — signed + notarized:** an Apple Developer account ($99/yr) removes the macOS warning; a
   Windows code-signing cert (~$100–400/yr) removes SmartScreen. electron-builder automates both.
+
+## Preferences
+
+The renderer's origin is the loopback server, and the port can change between launches, so
+`localStorage` (keyed by origin) cannot be trusted to keep recents, profiles or settings. When the
+app passes `preferenceKeys` to `runDesktop`, the main process stores exactly those keys as files in
+`<userData>/preferences/` and the window gets a sandboxed preload exposing `window.brainanaPreferences`
+(read all, write one key). IPC is accepted only from the app's own top frame and origin; keys outside
+the declared list, and values over 1 MB, are refused; writes are serialized and atomic, and quit waits
+for them.
+
+On the renderer side, `packages/core-client/preferenceStorage.ts` loads that store once at startup
+and keeps the synchronous `Storage`-like API the code already used, so the same code runs on
+`localStorage` in browser mode. Declared keys found in the origin's `localStorage` are migrated
+once. If the store cannot be read, the session goes read-only rather than overwrite the files.
+
+The Viewer's keys are listed in `apps/viewer/desktop.mjs`; `tests/preference_keys_test.mjs` fails if
+code uses a key that is not declared there.
 
 ## Gotchas
 
