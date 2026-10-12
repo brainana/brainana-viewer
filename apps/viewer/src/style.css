@@ -11,7 +11,7 @@ html, body { height: 100%; margin: 0; }
    below #app during the fullscreen viewport-height transition (first-paint amber edge). */
 html { background: var(--bg); }
 body {
-  font: 13px/1.5 var(--font);
+  font: var(--fs-2)/1.5 var(--font); /* --fs-2 = 13px; scales with settings → text size */
   background: var(--bg);
   color: var(--text);
   overflow: hidden;
@@ -952,3 +952,53 @@ details.panel-note > summary + p { margin-top: var(--sp-2); }
 .roi-rate-row.head .num.active { color: var(--accent-2); }
 .roi-rate-legend { font-size: var(--fs-xs); margin: 0; }
 .roi-rate-row .hemi { color: var(--muted); }
+
+/* ---------- settings dialog ----------
+   Side nav (sections) | pane of titled groups. Each group is a two-column grid — a fixed label
+   column and a left-aligned control column — so every control in a section lines up. */
+.settings-dialog { width: min(640px, 94vw); display: flex; flex-direction: column; overflow: hidden; }
+.settings-body { display: grid; grid-template-columns: 128px minmax(0, 1fr); gap: var(--sp-6);
+  min-height: 300px; overflow: hidden; }
+.settings-nav { display: flex; flex-direction: column; gap: var(--sp-1);
+  padding-right: var(--sp-5); border-right: 1px solid var(--border); }
+.settings-tab { display: flex; align-items: center; height: calc(var(--ctl-h) + var(--sp-3)); padding: 0 var(--sp-4);
+  background: transparent; border: 1px solid transparent; border-radius: var(--r-sm); color: var(--muted);
+  text-align: left; cursor: pointer; transition: color var(--dur) var(--ease), background var(--dur) var(--ease); }
+.settings-tab:hover { color: var(--accent-2); }
+.settings-tab.active { color: var(--accent-2); background: var(--accent-tint); border-color: var(--accent); }
+.settings-pane { overflow-y: auto; min-width: 0; padding-right: var(--sp-2); }
+.settings-group + .settings-group { margin-top: var(--sp-6); padding-top: var(--sp-5); border-top: 1px solid var(--border); }
+.settings-group h3 { font-size: var(--fs-1); text-transform: uppercase; letter-spacing: .06em;
+  color: var(--muted); margin: 0 0 var(--sp-4); }
+.settings-rows { display: grid; grid-template-columns: 124px minmax(0, 1fr); column-gap: var(--sp-5);
+  row-gap: var(--sp-4); align-items: center; }
+.settings-label { color: var(--muted); }
+.settings-control { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-5); min-width: 0; }
+.settings-control select { min-width: 150px; }
+.settings-control input[type="number"] { width: var(--num-w); }
+.settings-control input[type="color"] { width: calc(var(--ctl-h) + var(--sp-3)); height: var(--ctl-h); padding: 0;
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--r-xs); cursor: pointer; }
+.settings-check { display: inline-flex; align-items: center; gap: var(--sp-2); cursor: pointer; }
+.settings-hint { margin: var(--sp-4) 0 0; font-size: var(--fs-1); color: var(--muted); }
+.settings-actions { display: flex; flex-wrap: wrap; gap: var(--sp-3); margin-top: var(--sp-5); }
+.settings-dialog .dialog-foot { padding-top: var(--sp-5); border-top: 1px solid var(--border); }
+
+/* ---------- personal appearance (settings → appearance) ----------
+   Overrides of the shared tokens (packages/ui/theme.css), keyed off attributes set on <html> by
+   settings/preferences.ts. The default theme sets nothing. Image canvases are unaffected. */
+:root[data-theme="neutral"] {
+  --bg: #111418; --panel: #191d23; --panel-2: #21262e; --elev: #2a313b;
+  --text: #e6eaf0; --muted: #98a3b1; --border: #29303a; --border-2: #38414d;
+  --accent: #6fb1f0; --accent-2: #a6cff6; --accent-ink: #06182a; --accent-glow: rgba(111,177,240,.16);
+  --shadow-sm: 0 1px 0 rgba(220,235,255,.03), 0 4px 12px -8px rgba(0,0,0,.6);
+  --shadow: 0 1px 0 rgba(220,235,255,.03), 0 14px 34px -18px rgba(0,0,0,.72);
+}
+:root[data-theme="contrast"] {
+  --bg: #000; --panel: #0a0a0a; --panel-2: #161616; --elev: #262626;
+  --text: #fff; --muted: #d6d6d6; --border: #6b6b6b; --border-2: #9a9a9a;
+  --accent: #ffd400; --accent-2: #ffe866; --accent-ink: #000; --accent-glow: rgba(255,212,0,.22);
+  --accent-tint: color-mix(in srgb, var(--accent) 22%, var(--panel-2));
+}
+:root[data-text-size="large"] { --fs-xs: 11px; --fs-sm: 12px; --fs-1: 13px; --fs-2: 14px; --fs-3: 16px; --fs-4: 20px; }
+:root[data-text-size="larger"] { --fs-xs: 12px; --fs-sm: 13px; --fs-1: 14px; --fs-2: 15px; --fs-3: 17px; --fs-4: 22px; }
+:root[data-large-controls="true"] { --ctl-h: 26px; }

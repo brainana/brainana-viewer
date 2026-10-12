@@ -9,6 +9,7 @@ import { openFsPicker } from '../ui/dialogs/fsPicker.ts'
 import { BookmarkStore, bookmarkName, sameBookmarkIds } from './bookmarks.ts'
 import { buildReportHtml } from './html.ts'
 import { generateReport, reportFilename, type ReportContext } from './generate.ts'
+import { prefs } from '../settings/preferences.ts'
 
 export interface ReportDialogDeps {
   client: RuntimeClient
@@ -72,7 +73,7 @@ export function mountReportDialog(deps: ReportDialogDeps): void {
 
   // --- options ---
   const shotsCheck = h('input', { type: 'checkbox' }) as HTMLInputElement
-  shotsCheck.checked = true
+  shotsCheck.checked = prefs().reports.screenshots
   const summary = h('p', { class: 'muted' })
   const warn = h('p', { class: 'msg' })
 
@@ -89,9 +90,12 @@ export function mountReportDialog(deps: ReportDialogDeps): void {
 
   // --- destination ---
   const dlRadio = h('input', { type: 'radio', name: 'report-destination', value: 'download' }) as HTMLInputElement
-  dlRadio.checked = true // download is the default: it behaves identically in browser and desktop
   const dsRadio = h('input', { type: 'radio', name: 'report-destination', value: 'dataset' }) as HTMLInputElement
   dsRadio.disabled = !sourceId
+  // Download unless the user's report default says otherwise (settings → reports) and a dataset is
+  // open to save into. Download is the fallback because it behaves the same in browser and desktop.
+  dsRadio.checked = prefs().reports.destination === 'dataset' && Boolean(sourceId)
+  dlRadio.checked = !dsRadio.checked
   const folderText = h('span', { class: 'report-folder' }, [sourceLabel ?? 'dataset root'])
   let folder = '' // source-relative; '' is the source root
   const chooseBtn = h('button', { type: 'button', class: 'ghost sm' }, ['choose folder…'])

@@ -20,7 +20,15 @@ runDesktop({
   preferredPort: 5173,
   // Everything the Viewer remembers between launches. The desktop shell persists exactly these keys
   // in files under userData (the loopback port, and so localStorage, can change per launch).
-  preferenceKeys: ['brainana.recentSources.v1', 'brainana.remoteProfiles.v1', 'brainana.fovMode.v1'],
+  // tests/preference_keys_test.mjs checks this list against the keys the code actually uses.
+  preferenceKeys: [
+    'brainana.recentSources.v1',
+    'brainana.remoteProfiles.v1',
+    'brainana.fovMode.v1',
+    'brainana.viewer.preferences.v1',
+    'brainana.viewer.panels.v1',
+  ],
+  settingsMenu: true,
 }).catch((error) => {
   console.error('Desktop launch failed:', error)
   process.exit(1)

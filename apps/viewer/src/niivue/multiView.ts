@@ -244,13 +244,27 @@ export class MultiView {
 
   // Show/hide the VOLUME crosshair only (zero its line width — alpha alone isn't honoured). The
   // surface render never shows a 3D crosshair. (Marker pin visibility is handled by the dashboard.)
-  #crosshairWidth = 1
+  #crosshairWidth = 1 // the width to show; visibility is applied on top of it
+  #crosshairOn = true
   setCrosshairVisible(on: boolean): void {
+    this.#crosshairOn = on
+    this.#applyCrosshairWidth()
+  }
+
+  // Colour + line width (personal viewing defaults). Colour goes to both instances so the surface
+  // pane would match should it ever show a crosshair; width matters for the slices only.
+  setCrosshairStyle(color: [number, number, number, number], width: number): void {
+    this.slices.opts.crosshairColor = color
+    this.render.opts.crosshairColor = color
+    this.#crosshairWidth = Math.max(1, width)
+    this.#applyCrosshairWidth()
+  }
+
+  #applyCrosshairWidth(): void {
     const nv = this.slices as unknown as { setCrosshairWidth?: (w: number) => void; opts: { crosshairWidth: number } }
-    if (on && this.#crosshairWidth <= 0) this.#crosshairWidth = 1
-    else if (!on) this.#crosshairWidth = nv.opts.crosshairWidth || this.#crosshairWidth
-    if (nv.setCrosshairWidth) nv.setCrosshairWidth(on ? this.#crosshairWidth : 0)
-    else nv.opts.crosshairWidth = on ? this.#crosshairWidth : 0
+    const width = this.#crosshairOn ? this.#crosshairWidth : 0
+    if (nv.setCrosshairWidth) nv.setCrosshairWidth(width)
+    else nv.opts.crosshairWidth = width
     this.slices.drawScene()
   }
 

@@ -5,6 +5,7 @@ import { SourceManager } from '@brainana/core-client/sourceManager.ts'
 import { FilesystemClient } from '@brainana/core-client/filesystemClient.ts'
 import { initializePreferenceStorage } from '@brainana/core-client/preferenceStorage.ts'
 import { mountDashboard } from './ui/dashboard.ts'
+import { loadPreferences } from './settings/preferences.ts'
 import '@brainana/ui/theme.css' // shared design tokens + fonts — must load before viewer layout
 import './style.css'
 
@@ -35,6 +36,7 @@ async function main(): Promise<void> {
 
   // Desktop preferences load asynchronously once; everything after reads them synchronously.
   await initializePreferenceStorage()
+  loadPreferences()
   const client = new RuntimeClient()
   const sources = new SourceManager(client)
   const files = new FilesystemClient(client)

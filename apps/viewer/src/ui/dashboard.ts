@@ -36,6 +36,9 @@ import { createColorDisplay, type ColorDisplay, type ColorDisplayTarget } from '
 import { collectAtlasRows, collectVertex, collectMorphology, collectRetinotopy, collectSomatotopy, collectVisualFieldPoints } from '../report/collect.ts'
 import { BookmarkStore, bookmarkName, sameBookmarkIds } from '../report/bookmarks.ts'
 import { mountReportDialog } from '../report/dialog.ts'
+import { onSettingsRequest } from '@brainana/core-client/preferenceStorage.ts'
+import { prefs, readJson, writeJson, hexToRgba, PANEL_SIZES_KEY, PREFERENCES_CHANGED } from '../settings/preferences.ts'
+import { openSettings, settingsOpen } from '../settings/settingsUI.ts'
 import type { LocationReadout, ViewState } from '../report/model.ts'
 import type { ReportContext } from '../report/generate.ts'
 
@@ -226,6 +229,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
   const scanSelect = h('select', { id: 'scan-select', title: scanPickerTooltip(null) }) as HTMLSelectElement
   scanSelect.disabled = true
   const datasetBtn = h('button', { type: 'button', class: 'primary' }, ['dataset'])
+  const settingsBtn = h('button', { type: 'button', class: 'ghost', id: 'settings-open', title: 'Settings (Ctrl+,)' }, ['settings'])
   const volCheck = h('input', { type: 'checkbox' }) as HTMLInputElement
   volCheck.checked = true
   const volSelect = h('select', { title: 'Base volume (FreeSurfer mri/)', class: 'narrow' })
@@ -240,10 +244,12 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
   const surfCheck = h('input', { type: 'checkbox' }) as HTMLInputElement
   surfCheck.checked = true
   const surfSelect = h('select', { title: 'Cortical surface', class: 'narrow' })
+  // Toolbar toggles start from the personal viewing defaults (settings → viewing).
+  const startView = prefs().viewing
   const lhCheck = h('input', { type: 'checkbox' }) as HTMLInputElement
-  lhCheck.checked = true
+  lhCheck.checked = startView.left
   const rhCheck = h('input', { type: 'checkbox' }) as HTMLInputElement
-  rhCheck.checked = true
+  rhCheck.checked = startView.right
   const neighborhoodSelect = h(
     'select',
     { class: 'sm' },
@@ -281,11 +287,11 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
 
   // --- Marker / Crosshair toolbar controls: show/hide toggles, size, and placement mode ---
   const markerCheck = h('input', { type: 'checkbox' }) as HTMLInputElement
-  markerCheck.checked = true
+  markerCheck.checked = startView.marker
   const crosshairCheck = h('input', { type: 'checkbox' }) as HTMLInputElement
-  crosshairCheck.checked = true
+  crosshairCheck.checked = startView.crosshair
   const orientCheck = h('input', { type: 'checkbox' }) as HTMLInputElement
-  orientCheck.checked = true
+  orientCheck.checked = startView.orientation
   markerCheck.addEventListener('change', () => {
     marker?.setVisible(markerCheck.checked)
     if (markerCheck.checked) placeMarker()
@@ -297,7 +303,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
     min: 0.3,
     max: 3,
     step: 0.1,
-    value: 1,
+    value: startView.markerSize,
     hideBox: true, // tight toolbar slot; the number box overflowed onto the mode select
     onInput: (v) => {
       marker?.setSize(v)
@@ -315,11 +321,12 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
       placeMarker()
     },
   )
-  markerModeSel.setValue('nearestNode')
+  markerModeSel.setValue(startView.markerMode)
   // Apply the current toolbar states to the freshly-created view/marker (called on subject load).
   const syncMarkerControls = (): void => {
     marker?.setSize(markerSize.value())
     marker?.setVisible(markerCheck.checked)
+    view?.setCrosshairStyle(hexToRgba(prefs().viewing.crosshairColor), prefs().viewing.crosshairWidth)
     view?.setCrosshairVisible(crosshairCheck.checked)
     view?.setSliceOrientationVisible(orientCheck.checked)
     markerMode = markerModeSel.value() as MarkerMode
@@ -340,7 +347,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
     // title (row 1) · version + dataset (row 2)
     tbGroup('', [
       h('div', { class: 'tb-cell brand' }, ['Brainana Viewer']),
-      h('div', { class: 'tb-cell' }, [h('span', { class: 'tb-version' }, [`v${__APP_VERSION__}`]), datasetBtn]),
+      h('div', { class: 'tb-cell' }, [h('span', { class: 'tb-version' }, [`v${__APP_VERSION__}`]), datasetBtn, settingsBtn]),
     ]),
     // sub (row 1) · ses / reconstruction (row 2)
     tbGroup('', [
@@ -676,6 +683,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
       const end = (e: PointerEvent): void => {
         if (!dragging) return
         dragging = false
+        savePanelSizes()
         try {
           handle.releasePointerCapture(e.pointerId)
         } catch {
@@ -712,6 +720,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
     const end = (e: PointerEvent): void => {
       if (!dragging) return
       dragging = false
+      savePanelSizes()
       try {
         panelResizer.releasePointerCapture(e.pointerId)
       } catch {
@@ -743,6 +752,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
     const end = (e: PointerEvent): void => {
       if (!dragging) return
       dragging = false
+      savePanelSizes()
       try {
         railResizer.releasePointerCapture(e.pointerId)
       } catch {
@@ -1043,6 +1053,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
     view?.resize()
   }
   for (const b of layoutBtns) b.addEventListener('click', () => setActiveLayout(b.dataset.layout as Layout))
+  setActiveLayout(prefs().viewing.layout)
 
   const applySurface = async (kind: string): Promise<void> => {
     if (!view || !manifest) return
@@ -1451,6 +1462,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
     const end = (e: PointerEvent): void => {
       if (!dragging) return
       dragging = false
+      savePanelSizes()
       try {
         infoResizer.releasePointerCapture(e.pointerId)
       } catch {
@@ -2484,6 +2496,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
     colormapLuts = assets.luts
     colorDisplay = createColorDisplay(colorDisplayCallbacks, colormapGradients, colormapInfos)
     colorDock.append(colorDisplay.element)
+    applyNavigationPrefs()
     marker = new Marker(created.render)
     // Orientation gizmo (R/L·A/P·S/I) is a permanent surface-pane widget, always shown.
     gizmo = new OrientationGizmo(surfacePane, created.render)
@@ -2525,9 +2538,13 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
   // the winner's manifest while still holding its own snapshot.
   let loadRun = 0
 
+  // True while a subject load is in flight (settings' "apply to current view" waits for it).
+  let loading = false
+
   const loadSubject = async (sourceId: string, subjectId: string, wantScanId: string | null = null): Promise<void> => {
     const run = ++loadRun
     const stale = () => run !== loadRun
+    loading = true
     const label = subjectId.replace(/^sub-/, '')
     showLoading(`Loading ${label}…`)
     // Capture the outgoing view before any state is overwritten, so it can be restored onto the new
@@ -2596,13 +2613,18 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
       const available = SURFACE_ORDER.filter((k) => manifest!.surfaces[k])
       surfSelect.innerHTML = ''
       available.forEach((k) => surfSelect.append(h('option', { value: k }, [SURFACE_LABELS[k]])))
-      // Keep the same surface type across a switch when this subject has it; else inflated / first.
+      // Keep the same surface type across a switch when this subject has it (unless the user asked
+      // for defaults on every load); else the preferred surface, inflated, or the first available.
+      const carry = snap != null && prefs().viewing.carryAcrossSubjects
+      const wanted = carry ? snap.surfaceKind : prefs().viewing.surface
       const surfDefault =
-        snap?.surfaceKind && (available as string[]).includes(snap.surfaceKind)
-          ? snap.surfaceKind
-          : available.includes('inflated')
-            ? 'inflated'
-            : available[0]
+        wanted && (available as string[]).includes(wanted)
+          ? wanted
+          : available.includes(prefs().viewing.surface)
+            ? prefs().viewing.surface
+            : available.includes('inflated')
+              ? 'inflated'
+              : available[0]
       if (surfDefault) surfSelect.value = surfDefault
 
       // Decide morphology shading now — applySurface (below) builds the surface from morphDisplay().
@@ -2610,6 +2632,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
 
       view = await (viewReady ??= ensureView())
       if (stale()) return
+      if (snap && !carry) applyViewingDefaults()
 
       // Apply the sticky fov preference to the incoming subject. It degrades to 'best' when this
       // dataset has no full-FOV volume, without clearing the preference, so a later subject that
@@ -2785,7 +2808,9 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
       syncReportControls()
       hideLoading()
     } catch (err) {
-      showError(errorText(err))
+      if (!stale()) showError(errorText(err))
+    } finally {
+      if (!stale()) loading = false
     }
   }
 
@@ -2872,9 +2897,11 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
   )
   sources.subscribe(() => void repopulateMonkeys())
 
-  // Arrow keys nudge the crosshair ±1.5 mm (Left/Right = x, Up/Down = superior/inferior).
-  const NUDGE = 1.5
+  // Arrow keys nudge the crosshair (Left/Right = x, Up/Down = superior/inferior) by the step set in
+  // settings → navigation (1.5 mm by default).
   window.addEventListener('keydown', (e) => {
+    if (settingsOpen()) return
+    const NUDGE = prefs().navigation.arrowStep
     const t = e.target as HTMLElement | null
     if (t && (t.tagName === 'INPUT' || t.tagName === 'SELECT' || t.tagName === 'TEXTAREA')) return
     const delta: Record<string, [number, number, number]> = {
@@ -2970,6 +2997,89 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
   window.addEventListener('resize', () => {
     view?.resize()
     updateVisualField()
+  })
+
+  // --- personal settings -------------------------------------------------------------------
+  // Toolbar toggles + layout from the viewing defaults. Used for "apply to current view", and on a
+  // subject switch when the user turned off carrying their current choices across subjects.
+  const applyViewingDefaults = (): void => {
+    const p = prefs().viewing
+    lhCheck.checked = p.left
+    rhCheck.checked = p.right
+    crosshairCheck.checked = p.crosshair
+    orientCheck.checked = p.orientation
+    markerCheck.checked = p.marker
+    markerSize.setValue(p.markerSize)
+    markerModeSel.setValue(p.markerMode)
+    syncMarkerControls()
+    applyHemiVisibility()
+    setActiveLayout(p.layout)
+  }
+
+  const applyNavigationPrefs = (): void => {
+    if (view) view.slices.opts.invertScrollDirection = prefs().navigation.reverseScroll
+  }
+  window.addEventListener(PREFERENCES_CHANGED, applyNavigationPrefs)
+
+  // Panel sizes are the CSS tracks the resizers drag. Restored before the first subject loads.
+  const PANEL_VARS: Array<[HTMLElement, string]> = [
+    [document.documentElement, '--legend-width'],
+    [document.documentElement, '--info-height'],
+    [main, '--rail-w'],
+    ...[1, 2, 3, 4].map((i): [HTMLElement, string] => [infoPanel, `--info-c${i}`]),
+  ]
+  function savePanelSizes(): void {
+    if (!prefs().viewing.rememberPanels) return
+    const sizes: Record<string, number> = {}
+    for (const [el, name] of PANEL_VARS) {
+      const px = parseFloat(el.style.getPropertyValue(name))
+      if (Number.isFinite(px)) sizes[name] = px
+    }
+    writeJson(PANEL_SIZES_KEY, sizes)
+  }
+  {
+    const saved = prefs().viewing.rememberPanels ? readJson(PANEL_SIZES_KEY) : null
+    const limit = Math.max(window.innerWidth, window.innerHeight)
+    for (const [el, name] of PANEL_VARS) {
+      const px = (saved as Record<string, unknown> | null)?.[name]
+      if (typeof px === 'number' && px >= 60 && px <= limit) el.style.setProperty(name, `${px}px`)
+    }
+  }
+
+  const showSettings = (): void =>
+    openSettings({
+      applyToView: async () => {
+        if (loading) throw new Error('wait for the subject to finish loading')
+        if (!view || !manifest) throw new Error('load a subject first')
+        applyViewingDefaults()
+        const surface = prefs().viewing.surface
+        if (surfSelect.value !== surface && Array.from(surfSelect.options).some((o) => o.value === surface)) {
+          surfSelect.value = surface
+          await applySurface(surface)
+        }
+      },
+      resetPanels: () => {
+        writeJson(PANEL_SIZES_KEY, null)
+        for (const [el, name] of PANEL_VARS) el.style.removeProperty(name)
+        view?.resize()
+        updateVisualField()
+      },
+      fov: () => fovPref,
+      setFov: (mode) => {
+        if (view && manifest) void applyFovMode(mode)
+        else {
+          fovPref = mode
+          saveFovPreference(mode)
+        }
+      },
+    })
+  settingsBtn.addEventListener('click', showSettings)
+  onSettingsRequest(showSettings) // desktop menu → Settings…
+  window.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === ',') {
+      e.preventDefault()
+      showSettings()
+    }
   })
 
   // Boot: ensure sources are loaded, then populate.
