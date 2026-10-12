@@ -34,6 +34,7 @@ interface RecallEntry {
 // `onDone` fires when the user clicks the next-step "continue, choose a monkey" button (after at
 // least one dataset exists): the dialog closes and the caller can steer focus to the monkey picker.
 export function mountSourcesDialog(deps: Deps, onChanged: () => void, onDone?: () => void): void {
+  if (document.querySelector('#datasets-dialog')) return // already open (toolbar + guide both open it)
   const { sources, files } = deps
   const recents = loadRecent()
 
@@ -63,7 +64,7 @@ export function mountSourcesDialog(deps: Deps, onChanged: () => void, onDone?: (
   closeBtn.addEventListener('click', close)
 
   let hasSources = false
-  const continueBtn = h('button', { type: 'button', class: 'primary' }, ['continue, choose a sub'])
+  const continueBtn = h('button', { type: 'button', class: 'primary', id: 'dataset-continue' }, ['continue, choose a sub'])
   continueBtn.disabled = true
   continueBtn.addEventListener('click', () => {
     close()
@@ -328,13 +329,14 @@ export function mountSourcesDialog(deps: Deps, onChanged: () => void, onDone?: (
   })
   const remotePath = h('input', { type: 'text', placeholder: '/remote/path/to/dataset', class: 'grow' }) as HTMLInputElement
   const remoteAddBtn = h('button', { type: 'button', class: 'primary' }, ['add'])
-  const remoteAddRow = h('div', { class: 'row' }, [remotePath, remoteBrowseBtn, remoteAddBtn])
+  const remoteAddRow = h('div', { class: 'row', id: 'dataset-remote-add' }, [remotePath, remoteBrowseBtn, remoteAddBtn])
   // Add/validation status sits directly under the add row it refers to (not up in the connect row).
   const remoteAddMsg = h('span', { class: 'msg' })
 
   // Toggle the connected vs disconnected layout. Connection fields lock while connected so the open
   // session's identity can't drift from what add uses.
   const setConnected = (connected: boolean): void => {
+    remoteAddRow.dataset.connected = String(connected) // read by the guided tour
     for (const input of [rHost, rUser, rPort, rPass]) input.disabled = connected
     connectBtn.style.display = connected ? 'none' : ''
     disconnectBtn.style.display = connected ? '' : 'none'
@@ -494,6 +496,7 @@ export function mountSourcesDialog(deps: Deps, onChanged: () => void, onDone?: (
   ])
   const remoteFormCollapsed = !sources.list().some((s) => s.type === 'remote')
   const remoteForm = h('div', {
+    id: 'dataset-remote',
     class: `source-form collapsible${remoteFormCollapsed ? ' collapsed' : ''}`,
   }, [remoteFormHead, remoteFormBody])
   const syncRemoteFormExpanded = (): void => {
@@ -521,11 +524,12 @@ export function mountSourcesDialog(deps: Deps, onChanged: () => void, onDone?: (
     }
   }
 
-  const dialog = h('div', { class: 'dialog' }, [
+  // Ids here are anchors for the guided tour (ui/guide/steps.ts).
+  const dialog = h('div', { class: 'dialog', id: 'datasets-dialog' }, [
     h('div', { class: 'dialog-head' }, [h('h2', {}, ['datasets']), h('span', { class: 'spacer' }), closeBtn]),
     list,
     h('div', { class: 'source-forms' }, [
-      h('div', { class: 'source-form' }, [
+      h('div', { class: 'source-form', id: 'dataset-local' }, [
         h('h3', {}, ['local dataset']),
         h('div', { class: 'row' }, [localPath, browseBtn, localBtn]),
         localMsg,

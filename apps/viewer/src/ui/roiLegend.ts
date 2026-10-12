@@ -118,6 +118,8 @@ export class RoiLegend {
       // resets the same longhands.
       ;(el.querySelector('.legend-swatch') as HTMLElement).style.backgroundColor = `rgb(${row.color[0]},${row.color[1]},${row.color[2]})`
       el.dataset.roiId = String(row.id)
+      el.setAttribute('aria-pressed', String(!hidden))
+      el.title = `Click to ${hidden ? 'show' : 'hide'} this region; shift-click to show only this region`
       this.#rowsEl.append(el)
     }
   }

@@ -10,6 +10,7 @@ import { FOV_MODES, type FovMode } from '../state/fovMode.ts'
 import {
   DEFAULTS,
   DESTINATIONS,
+  GUIDE_KEY,
   LAYOUTS,
   MARKER_MODES,
   SURFACES,
@@ -19,6 +20,7 @@ import {
   parseSettingsFile,
   prefs,
   savePreferences,
+  writeJson,
   type Preferences,
   type Section,
 } from './preferences.ts'
@@ -36,6 +38,7 @@ const SECTIONS: Array<{ id: Section; label: string }> = [
   { id: 'viewing', label: 'viewing' },
   { id: 'navigation', label: 'navigation' },
   { id: 'reports', label: 'reports' },
+  { id: 'guide', label: 'guide' },
   { id: 'appearance', label: 'appearance' },
 ]
 
@@ -205,6 +208,19 @@ export function openSettings(actions: SettingsActions): void {
     ]
   }
 
+  function guide(): HTMLElement[] {
+    return [
+      group(
+        'guided tour',
+        [
+          row('on launch', check('guide', 'openOnLaunch', 'open the guide')),
+          row('progress', check('guide', 'rememberProgress', 'remember where I left off')),
+        ],
+        [actionsRow(action('forget progress', () => writeJson(GUIDE_KEY, null), 'tour progress forgotten'))],
+      ),
+    ]
+  }
+
   function appearance(): HTMLElement[] {
     return [
       group(
@@ -219,7 +235,7 @@ export function openSettings(actions: SettingsActions): void {
     ]
   }
 
-  const RENDER: Record<Section, () => HTMLElement[]> = { viewing, navigation, reports, appearance }
+  const RENDER: Record<Section, () => HTMLElement[]> = { viewing, navigation, reports, guide, appearance }
 
   // --- shell -----------------------------------------------------------------------------------
   const pane = aria(h('div', { class: 'settings-pane', id: 'settings-pane' }), { role: 'tabpanel' })

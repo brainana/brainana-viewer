@@ -1002,3 +1002,38 @@ details.panel-note > summary + p { margin-top: var(--sp-2); }
 :root[data-text-size="large"] { --fs-xs: 11px; --fs-sm: 12px; --fs-1: 13px; --fs-2: 14px; --fs-3: 16px; --fs-4: 20px; }
 :root[data-text-size="larger"] { --fs-xs: 12px; --fs-sm: 13px; --fs-1: 14px; --fs-2: 15px; --fs-3: 17px; --fs-4: 22px; }
 :root[data-large-controls="true"] { --ctl-h: 26px; }
+
+/* ---------- toolbar: guided setup above settings ----------
+   The brand cluster's 2nd column. Both buttons fill the column so they stack at one width. */
+.tb-group.brand-group .tb-tool { justify-self: stretch; }
+.tb-group.brand-group .tb-tool > button { flex: 1 1 auto; }
+#guided-setup.active { border-color: var(--accent); color: var(--accent-2); background: var(--accent-tint); }
+
+/* ---------- guided tour ----------
+   A floating card placed beside the highlighted control (ui/guide/guide.ts). Above dialog
+   overlays (z-index 50) so it can point into the dataset and report dialogs. */
+.guide-card { position: fixed; z-index: 60; width: min(320px, calc(100vw - 2 * var(--sp-5)));
+  max-height: calc(100vh - 2 * var(--sp-5)); overflow: auto; padding: var(--sp-5) var(--sp-6) var(--sp-4);
+  background: var(--panel); border: 1px solid var(--accent); border-radius: var(--r-lg);
+  box-shadow: var(--shadow), 0 0 0 4px var(--accent-glow); }
+.guide-card[hidden] { display: none; }
+.guide-head { display: flex; align-items: center; gap: var(--sp-3); margin: calc(-1 * var(--sp-2)) 0 var(--sp-3);
+  cursor: grab; user-select: none; touch-action: none; }
+.guide-head:active { cursor: grabbing; }
+.guide-kicker { font-size: var(--fs-1); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.guide-progress { margin-left: auto; font-size: var(--fs-1); font-family: var(--mono); color: var(--muted); }
+.guide-progress[hidden] { display: none; }
+.guide-hide { margin-left: var(--sp-1); }
+.guide-progress[hidden] + .guide-hide { margin-left: auto; }
+.guide-card h2 { margin: 0 0 var(--sp-2); font-size: var(--fs-3); outline: none; }
+.guide-card p { margin: 0; color: var(--text); }
+.guide-actions { display: flex; flex-wrap: wrap; gap: var(--sp-3); margin-top: var(--sp-5); }
+.guide-actions:empty { display: none; }
+.guide-nav { display: flex; align-items: center; gap: var(--sp-3); margin-top: var(--sp-5);
+  padding-top: var(--sp-5); border-top: 1px solid var(--border); }
+.guide-nav[hidden] { display: none; }
+.guide-nav select { flex: 1 1 auto; min-width: 0; }
+.guide-foot { display: flex; justify-content: flex-end; margin-top: var(--sp-4); }
+/* The control the current step is about. */
+.guided-target { outline: 2px solid var(--accent) !important; outline-offset: 2px;
+  box-shadow: 0 0 0 6px var(--accent-glow); border-radius: var(--r-sm); }

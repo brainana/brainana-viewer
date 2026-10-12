@@ -27,6 +27,7 @@ runDesktop({
     'brainana.fovMode.v1',
     'brainana.viewer.preferences.v1',
     'brainana.viewer.panels.v1',
+    'brainana.viewer.guide.v1',
   ],
   settingsMenu: true,
 }).catch((error) => {

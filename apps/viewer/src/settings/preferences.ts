@@ -11,6 +11,7 @@ import { preferenceStorage } from '@brainana/core-client/preferenceStorage.ts'
 
 export const PREFERENCES_KEY = 'brainana.viewer.preferences.v1'
 export const PANEL_SIZES_KEY = 'brainana.viewer.panels.v1'
+export const GUIDE_KEY = 'brainana.viewer.guide.v1'
 /** Fired on window after the saved preferences change. */
 export const PREFERENCES_CHANGED = 'brainana-preferences-changed'
 
@@ -58,6 +59,10 @@ export interface Preferences {
     screenshots: boolean
     destination: (typeof DESTINATIONS)[number]
   }
+  guide: {
+    openOnLaunch: boolean
+    rememberProgress: boolean
+  }
 }
 
 export type Section = keyof Preferences
@@ -81,6 +86,7 @@ export const DEFAULTS: Preferences = {
   },
   navigation: { reverseScroll: false, arrowStep: 1.5 },
   reports: { screenshots: true, destination: 'download' },
+  guide: { openOnLaunch: false, rememberProgress: true },
 }
 
 // Constraints beyond "same type as the default".

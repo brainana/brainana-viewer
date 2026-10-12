@@ -58,7 +58,7 @@ assert.equal($('.settings-dialog').getAttribute('role'), 'dialog')
 const tabs = [...document.querySelectorAll('.settings-tab')]
 assert.deepEqual(
   tabs.map((t) => t.textContent),
-  ['viewing', 'navigation', 'reports', 'appearance'],
+  ['viewing', 'navigation', 'reports', 'guide', 'appearance'],
 )
 assert.equal($('.settings-tab.active').dataset.section, 'viewing')
 assert.equal(document.activeElement, tabs[0])
@@ -86,7 +86,7 @@ ok('apply to current view runs the dashboard action and reports it')
 $('.settings-tab.active').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
 assert.equal($('.settings-tab.active').dataset.section, 'navigation')
 assert.ok($('#settings-navigation-arrowStep'))
-tabs[3].click()
+tabs[4].click()
 change('#settings-appearance-theme', 'contrast')
 assert.equal(document.documentElement.dataset.theme, 'contrast')
 ok('arrow keys and clicks switch sections; appearance applies at once')

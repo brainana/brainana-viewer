@@ -39,6 +39,8 @@ import { mountReportDialog } from '../report/dialog.ts'
 import { onSettingsRequest } from '@brainana/core-client/preferenceStorage.ts'
 import { prefs, readJson, writeJson, hexToRgba, PANEL_SIZES_KEY, PREFERENCES_CHANGED } from '../settings/preferences.ts'
 import { openSettings, settingsOpen } from '../settings/settingsUI.ts'
+import { installGuide } from './guide/guide.ts'
+import { tourFeatures } from './guide/steps.ts'
 import type { LocationReadout, ViewState } from '../report/model.ts'
 import type { ReportContext } from '../report/generate.ts'
 
@@ -228,7 +230,8 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
   // "this build has no scan picker".
   const scanSelect = h('select', { id: 'scan-select', title: scanPickerTooltip(null) }) as HTMLSelectElement
   scanSelect.disabled = true
-  const datasetBtn = h('button', { type: 'button', class: 'primary' }, ['dataset'])
+  const datasetBtn = h('button', { type: 'button', class: 'primary', id: 'dataset-open' }, ['dataset'])
+  const guidedBtn = h('button', { type: 'button', class: 'ghost', id: 'guided-setup', title: 'A step-by-step tour of the viewer' }, ['guided setup'])
   const settingsBtn = h('button', { type: 'button', class: 'ghost', id: 'settings-open', title: 'Settings (Ctrl+,)' }, ['settings'])
   const volCheck = h('input', { type: 'checkbox' }) as HTMLInputElement
   volCheck.checked = true
@@ -240,7 +243,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
     b.dataset.fov = m.mode
     return b
   })
-  const fovGroup = h('div', { class: 'views fov-modes' }, fovBtns)
+  const fovGroup = h('div', { id: 'tour-fov', class: 'views fov-modes' }, fovBtns)
   const surfCheck = h('input', { type: 'checkbox' }) as HTMLInputElement
   surfCheck.checked = true
   const surfSelect = h('select', { title: 'Cortical surface', class: 'narrow' })
@@ -265,16 +268,17 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
     b.dataset.layout = l.k
     return b
   })
-  const panelBtns = PANEL_BUTTONS.map((name) => h('button', { type: 'button', class: 'panel-btn' }, [name]))
+  // Ids (tour-atlas, tour-function, …) are guided-tour anchors, like every other `tour-*` id below.
+  const panelBtns = PANEL_BUTTONS.map((name) => h('button', { type: 'button', class: 'panel-btn', id: `tour-${name === 'func map' ? 'function' : name}` }, [name]))
   // Report controls. They are mounted in the left rail's `points` block (assembled with volRail
   // below), not the top bar: the rail is a full-height column, so there is room to list every
   // bookmarked point with a jump-back button instead of reducing them to a count. Both buttons stay
   // disabled until a subject is loaded — there is nothing to sample or describe before that.
-  const addPointBtn = h('button', { type: 'button', class: 'ghost rail-btn', title: 'Bookmark the current crosshair for the report' }, ['+ point']) as HTMLButtonElement
+  const addPointBtn = h('button', { type: 'button', id: 'tour-add-point', class: 'ghost rail-btn', title: 'Bookmark the current crosshair for the report' }, ['+ point']) as HTMLButtonElement
   const pointCount = h('span', { class: 'badge point-count', title: 'Bookmarked points' }, ['0'])
   const reportBtn = h(
     'button',
-    { type: 'button', class: 'ghost rail-btn report-btn', title: 'Generate an HTML report and export it' },
+    { type: 'button', id: 'tour-report', class: 'ghost rail-btn report-btn', title: 'Generate an HTML report and export it' },
     [downloadIcon(), h('span', {}, ['generate report…'])],
   ) as HTMLButtonElement
   addPointBtn.disabled = true
@@ -344,10 +348,13 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
   const tbGroup = (cls: string, cells: HTMLElement[]): HTMLElement =>
     h('div', { class: cls ? `tb-group ${cls}` : 'tb-group' }, cells)
   const toolbar = h('header', { class: 'toolbar' }, [
-    // title (row 1) · version + dataset (row 2)
-    tbGroup('', [
+    // title (row 1) · version + dataset (row 2) | guided setup (row 1) · settings (row 2). Four
+    // cells in the two-row, column-flowing grid make two columns: the two buttons stack, same width.
+    tbGroup('brand-group', [
       h('div', { class: 'tb-cell brand' }, ['Brainana Viewer']),
-      h('div', { class: 'tb-cell' }, [h('span', { class: 'tb-version' }, [`v${__APP_VERSION__}`]), datasetBtn, settingsBtn]),
+      h('div', { class: 'tb-cell' }, [h('span', { class: 'tb-version' }, [`v${__APP_VERSION__}`]), datasetBtn]),
+      h('div', { class: 'tb-cell tb-tool' }, [guidedBtn]),
+      h('div', { class: 'tb-cell tb-tool' }, [settingsBtn]),
     ]),
     // sub (row 1) · ses / reconstruction (row 2)
     tbGroup('', [
@@ -357,17 +364,17 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
     // vol (row 1) · surf (row 2). LH/RH live in the hemisphere/marker cluster (freed by the underlay rail).
     tbGroup('', [
       h('div', { class: 'tb-cell' }, [
-        h('label', { class: 'tb-field inline tb-layer-row' }, [volCheck, h('span', { class: 'tb-layer-name' }, ['vol']), volSelect]),
+        h('label', { id: 'tour-volume', class: 'tb-field inline tb-layer-row' }, [volCheck, h('span', { class: 'tb-layer-name' }, ['vol']), volSelect]),
         h('label', { class: 'tb-field inline' }, [h('span', {}, ['FOV']), fovGroup]),
       ]),
       h('div', { class: 'tb-cell' }, [
-        h('label', { class: 'tb-field inline tb-layer-row' }, [surfCheck, h('span', { class: 'tb-layer-name' }, ['surf']), surfSelect]),
+        h('label', { id: 'tour-surface-controls', class: 'tb-field inline tb-layer-row' }, [surfCheck, h('span', { class: 'tb-layer-name' }, ['surf']), surfSelect]),
       ]),
     ]),
     // view section — slice montage layouts (row 1) · surface view presets (row 2)
     tbGroup('', [
-      h('div', { class: 'tb-cell' }, [h('div', { class: 'montage' }, layoutBtns)]),
-      h('div', { class: 'tb-cell' }, [h('div', { class: 'views' }, viewBtns)]),
+      h('div', { class: 'tb-cell' }, [h('div', { id: 'tour-layout', class: 'montage' }, layoutBtns)]),
+      h('div', { class: 'tb-cell' }, [h('div', { id: 'tour-surface-views', class: 'views' }, viewBtns)]),
     ]),
     // LH/RH hemisphere toggles in the vol row (row 1) — occupying the slot vacated by the crosshair +
     // AP/SI/LR toggles, which now live in the right-hand underlay rail; surface marker + size +
@@ -377,7 +384,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
         h('label', { class: 'tb-field inline' }, [lhCheck, h('span', {}, ['LH'])]),
         h('label', { class: 'tb-field inline' }, [rhCheck, h('span', {}, ['RH'])]),
       ]),
-      h('div', { class: 'tb-cell marker-controls' }, [
+      h('div', { id: 'tour-marker', class: 'tb-cell marker-controls' }, [
         h('label', { class: 'tb-field inline' }, [markerCheck, h('span', {}, ['marker'])]),
         markerSize.element,
         markerModeSel.element,
@@ -404,8 +411,8 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
   // --- main grid ---
   const slicesCanvas = h('canvas', { id: 'slices', class: 'nv-canvas' }) as HTMLCanvasElement
   const surfaceCanvas = h('canvas', { id: 'surface', class: 'nv-canvas' }) as HTMLCanvasElement
-  const slicePane = h('div', { class: 'slice-pane' }, [slicesCanvas])
-  const surfacePane = h('div', { class: 'surface-pane' }, [surfaceCanvas])
+  const slicePane = h('div', { id: 'tour-slices', class: 'slice-pane' }, [slicesCanvas])
+  const surfacePane = h('div', { id: 'tour-surface', class: 'surface-pane' }, [surfaceCanvas])
   const viewerArea = h('div', { class: 'viewer-area' }, [slicePane, surfacePane])
   // Splitter for the surf-pane / side-panel boundary. It's a direct child of `main` (not the
   // aside) anchored to the column seam via CSS, so it's reliably on top and grabbable (Req 4).
@@ -428,16 +435,16 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
   const sideContent = h('div', { class: 'side-content' }, [legendSlot, funcSlot, changeSlot, morphSlot, sidePlaceholder])
   // Docked at the bottom of the side panel: the shared "Color display" section (colormap + legend +
   // display range + clip), mounted once the view/colormaps exist. Applies to the active overlay.
-  const colorDock = h('div', { class: 'color-dock' })
+  const colorDock = h('div', { id: 'tour-colors', class: 'color-dock' })
   const atlasLegend = h('aside', { class: 'atlas-legend' }, [sidePicker, sideContent, colorDock])
   // Each column is a flex box: a fixed (non-scrolling) header + an `.info-scroll` region that owns
   // the overflow, so the title stays put while only its content scrolls.
-  const infoPanel = h('section', { class: 'info-panel' }, [
+  const infoPanel = h('section', { id: 'tour-readouts', class: 'info-panel' }, [
     h('div', { class: 'info-col' }, [h('h3', {}, ['Coordinates']), h('div', { class: 'info-scroll' }, [h('div', { id: 'report-coordinates', class: 'muted' }, ['—'])])]),
     h('div', { class: 'info-col' }, [h('h3', {}, ['Atlas']), h('div', { class: 'info-scroll' }, [h('div', { id: 'report-anatomy', class: 'muted' }, ['—'])])]),
     h('div', { class: 'info-col' }, [h('h3', {}, ['Surface']), h('div', { class: 'info-scroll' }, [h('div', { id: 'report-surface', class: 'muted' }, ['—'])])]),
     h('div', { class: 'info-col' }, [h('h3', {}, ['Func Map']), h('div', { class: 'info-scroll' }, [h('div', { id: 'report-function', class: 'muted' }, ['—'])])]),
-    h('div', { class: 'info-col' }, [
+    h('div', { id: 'tour-visual-field', class: 'info-col' }, [
       h('div', { class: 'vf-header' }, [
         h('h3', {}, ['Visual field']),
         h('label', { class: 'neighborhood-control' }, [h('span', {}, ['neighborhood']), neighborhoodSelect]),
@@ -613,7 +620,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
   ])
   // The image-display half of the rail. Hidden on its own (not with the whole rail) when the subject
   // has no base volume, so the points block below it survives that case.
-  const underlayBlock = h('div', { class: 'rail-block' }, [
+  const underlayBlock = h('div', { id: 'tour-underlay', class: 'rail-block' }, [
     h('div', { class: 'vol-rail-head' }, [h('span', { class: 'vol-rail-title' }, ['underlay']), volResetBtn]),
     briSlider.element,
     conSlider.element,
@@ -631,7 +638,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
   const pointListHead = h('button', { type: 'button', class: 'group-head', title: 'Show or hide the bookmarked points' }, ['bookmarked'])
   const pointListGroup = h('div', { class: 'group point-list-group' }, [pointListHead, pointList])
   pointListHead.addEventListener('click', () => pointListGroup.classList.toggle('collapsed'))
-  const pointsBlock = h('div', { class: 'rail-block points-block' }, [
+  const pointsBlock = h('div', { id: 'tour-points', class: 'rail-block points-block' }, [
     h('div', { class: 'vol-rail-head' }, [h('span', { class: 'vol-rail-title' }, ['points']), pointCount]),
     addPointBtn,
     pointListGroup,
@@ -2540,11 +2547,14 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
 
   // True while a subject load is in flight (settings' "apply to current view" waits for it).
   let loading = false
+  // The last load's failure, shown by the guided tour; cleared by the next load.
+  let loadError: string | null = null
 
   const loadSubject = async (sourceId: string, subjectId: string, wantScanId: string | null = null): Promise<void> => {
     const run = ++loadRun
     const stale = () => run !== loadRun
     loading = true
+    loadError = null
     const label = subjectId.replace(/^sub-/, '')
     showLoading(`Loading ${label}…`)
     // Capture the outgoing view before any state is overwritten, so it can be restored onto the new
@@ -2677,6 +2687,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
         },
         { opacity: atlasOpacity },
       )
+      atlasPanel.element.id = 'tour-atlas-panel'
       sidePicker.append(atlasPanel.element)
       // Restore the remembered atlas (for tab toggling) only if this subject has one of the same name.
       lastAtlasSel = snap?.lastAtlasSel && manifest.atlases?.some((a) => a.name === snap.lastAtlasSel!.name) ? snap.lastAtlasSel : null
@@ -2727,6 +2738,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
         },
         { opacity: funcOpacity, brightness: funcBrightness },
       )
+      functionPanel.element.id = 'tour-function-panel'
       sidePicker.append(functionPanel.element)
 
       // --- longitudinal change maps (base template scans only) ---
@@ -2747,6 +2759,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
         },
         { opacity: changeOpacity },
       )
+      longPanel.element.id = 'tour-change-panel'
       sidePicker.append(longPanel.element)
       roiRateTable = createRoiRateTable()
       changeSlot.innerHTML = ''
@@ -2785,6 +2798,7 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
         },
         { metric: morphMetric, style: morphStyle },
       )
+      morphPanel.element.id = 'tour-morphology-panel'
       sidePicker.append(morphPanel.element)
       refreshColorDisplay()
 
@@ -2808,7 +2822,9 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
       syncReportControls()
       hideLoading()
     } catch (err) {
-      if (!stale()) showError(errorText(err))
+      if (stale()) return
+      loadError = errorText(err)
+      showError(loadError)
     } finally {
       if (!stale()) loading = false
     }
@@ -3074,6 +3090,25 @@ export function mountDashboard(root: HTMLElement, deps: Deps): void {
       },
     })
   settingsBtn.addEventListener('click', showSettings)
+
+  installGuide(guidedBtn, {
+    readState: () => ({
+      datasets: sources.list().length,
+      subjects: Array.from(monkeySelect.options).filter((o) => o.value).length,
+      dialogOpen: document.querySelector('#datasets-dialog') != null,
+      remoteOpen: document.querySelector('#dataset-remote:not(.collapsed)') != null,
+      connected: document.querySelector<HTMLElement>('#dataset-remote-add')?.dataset.connected === 'true',
+      loading,
+      loaded: manifest != null && main.classList.contains('monkey-loaded'),
+      error: loadError,
+      features: tourFeatures(manifest),
+      activePanel: dockedTab,
+      reportOpen: document.querySelector('.report-dialog') != null,
+    }),
+    openDatasets: () => datasetBtn.click(),
+    retry: () => monkeySelect.dispatchEvent(new Event('change')),
+    openSettings: showSettings,
+  })
   onSettingsRequest(showSettings) // desktop menu → Settings…
   window.addEventListener('keydown', (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key === ',') {
