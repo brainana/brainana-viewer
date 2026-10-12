@@ -13,6 +13,7 @@
 // everything below is pure or storage-only, and is covered by tests/fovmode_test.mjs.
 
 import type { FullFovVolume } from '../types.ts'
+import { preferenceStorage, type PreferenceStore } from '@brainana/core-client/preferenceStorage.ts'
 
 export type FovMode = 'best' | 'full'
 
@@ -68,12 +69,9 @@ export function fovTooltip(fullFov: FullFovVolume | null, stream: string | null 
 const KEY = 'brainana.fovMode.v1'
 const DEFAULT_MODE: FovMode = 'best'
 
-function storage(): Storage | null {
-  try {
-    return typeof localStorage !== 'undefined' ? localStorage : null
-  } catch {
-    return null // Safari private mode et al.
-  }
+// localStorage in the browser, the desktop preference files in the app (see preferenceStorage.ts).
+function storage(): PreferenceStore | null {
+  return preferenceStorage()
 }
 
 function isFovMode(value: unknown): value is FovMode {

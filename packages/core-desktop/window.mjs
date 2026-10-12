@@ -1,11 +1,13 @@
 // Builds the single hardened BrowserWindow. Kept separate from lifecycle (main.mjs) so future
 // tools (Aligner, Editor) reuse identical window hardening. The window is just a locked-down
 // Chromium CLIENT of the loopback server — it needs no Node access (the backend IS the HTTP
-// server), so we keep contextIsolation on, nodeIntegration off, sandbox on.
+// server), so we keep contextIsolation on, nodeIntegration off, sandbox on. The one exception is
+// the optional preferences preload (preload.cjs): a sandboxed contextBridge with two IPC calls.
+import { fileURLToPath } from 'node:url'
 import { BrowserWindow, shell } from 'electron'
 import { isInternalUrl } from './navigation.mjs'
 
-export function createMainWindow(url, { appLabel = 'Brainana' } = {}) {
+export function createMainWindow(url, { appLabel = 'Brainana', preload = false } = {}) {
   const win = new BrowserWindow({
     width: 1440,
     height: 900,
@@ -19,6 +21,7 @@ export function createMainWindow(url, { appLabel = 'Brainana' } = {}) {
     // momentarily reveals the bar. No-op on macOS, where the menu lives in the system bar.
     autoHideMenuBar: true,
     webPreferences: {
+      ...(preload ? { preload: fileURLToPath(new URL('./preload.cjs', import.meta.url)) } : {}),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,

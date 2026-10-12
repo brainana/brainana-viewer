@@ -1,6 +1,7 @@
-// Remember recently-used source specs across launches (localStorage).
+// Remember recently-used source specs across launches (localStorage, or desktop preference files).
 // SECURITY: secrets (passwords, private keys, passphrases) are NEVER persisted — only the
 // non-sensitive shape needed to re-offer a source (type, path/host/user/root, label).
+import { preferenceStorage, type PreferenceStore } from './preferenceStorage.ts'
 import type { LocalSourceSpec, RemoteSourceSpec } from './sourceManager.ts'
 
 const KEY = 'brainana.recentSources.v1'
@@ -23,12 +24,9 @@ export interface RecentRemote {
 
 export type RecentSource = RecentLocal | RecentRemote
 
-function storage(): Storage | null {
-  try {
-    return typeof localStorage !== 'undefined' ? localStorage : null
-  } catch {
-    return null // Safari private mode et al.
-  }
+// localStorage in the browser, the desktop preference files in the app (see preferenceStorage.ts).
+function storage(): PreferenceStore | null {
+  return preferenceStorage()
 }
 
 export function loadRecent(): RecentSource[] {

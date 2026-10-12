@@ -5,19 +5,52 @@
 // keyboard shortcuts (Quit, Copy/Paste, Reload, DevTools, Zoom, Fullscreen). So we build a
 // curated menu from Electron *roles*: roles give correct per-platform accelerators and labels
 // for free (Cmd on macOS, Ctrl elsewhere), which is exactly the set we want to preserve.
-import { Menu } from 'electron'
+import { BrowserWindow, Menu } from 'electron'
 
 const isMac = process.platform === 'darwin'
 
-export function applyAppMenu(appLabel = 'Brainana') {
+// settings: add "Settings…" (Cmd/Ctrl+,). The app owns the dialog; the menu only asks the focused
+// window to open it over the preload bridge (preload.cjs).
+export function applyAppMenu(appLabel = 'Brainana', { settings = false } = {}) {
+  const settingsItems = settings
+    ? [
+        {
+          label: 'Settings…',
+          accelerator: 'CmdOrCtrl+,',
+          click: () => BrowserWindow.getFocusedWindow()?.webContents.send('brainana:settings-open'),
+        },
+        { type: 'separator' },
+      ]
+    : []
   const template = [
     // macOS shows a menu at the top of the screen no matter what, so give it a native app menu
     // (App name → About/Hide/Quit) instead of a broken-looking bare one. Non-macOS gets Quit
     // under File below.
-    ...(isMac ? [{ label: appLabel, role: 'appMenu' }] : []),
+    // With settings, rebuild the standard appMenu so Settings sits where macOS users expect it.
+    ...(isMac
+      ? [
+          settings
+            ? {
+                label: appLabel,
+                submenu: [
+                  { role: 'about' },
+                  { type: 'separator' },
+                  ...settingsItems,
+                  { role: 'services' },
+                  { type: 'separator' },
+                  { role: 'hide' },
+                  { role: 'hideOthers' },
+                  { role: 'unhide' },
+                  { type: 'separator' },
+                  { role: 'quit' },
+                ],
+              }
+            : { label: appLabel, role: 'appMenu' },
+        ]
+      : []),
 
     // Non-macOS: the only File item we need is Quit (Ctrl+Q). On macOS this lives in appMenu.
-    ...(isMac ? [] : [{ label: 'File', submenu: [{ role: 'quit' }] }]),
+    ...(isMac ? [] : [{ label: 'File', submenu: [...settingsItems, { role: 'quit' }] }]),
 
     // Undo/Redo/Cut/Copy/Paste/Select All — required for clipboard shortcuts in text inputs.
     { role: 'editMenu' },
